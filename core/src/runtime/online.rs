@@ -181,7 +181,22 @@ where
         for port in self.ports.values() {
             port.start();
 
-            if self.options.online.hardware_assist {
+
+            // @ALIYA call filter API here to install dynamic rules if
+            if self.options.online.dyn_hardware_assist {
+                log::info!("Applying dynamic hardware filters...");
+                let res = self.filter.set_dynamic_hardware_filters(port);
+                match res {
+                    Ok(_) => (),
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to apply dynamic filters on Port {}. Reason: {}",
+                            port.id,
+                            error
+                        );
+                    }
+                }
+            } else if self.options.online.hardware_assist {
                 log::info!("Applying hardware filters...");
                 let res = self.filter.set_hardware_filter(port);
                 match res {

@@ -102,11 +102,15 @@ impl<'a> HardwareFilter<'a> {
         // RSS rule on each table (except table 1, which we're
         // using to drop traffic)
 
-        let _ = add_masked_redirects(self.port, 0);
+        //let _ = add_masked_redirects(self.port, 0);
 
         // Non-matching traffic will be dropped by default on table 1
         // Redirect is faster than using a default DROP rule
-        add_redirect(self.port, 0, 1, LOW_PRIORITY)?;
+                // Pattern matches all Ethernet traffic
+        let mut pattern_rules: PatternRules = vec![];
+        flow_item::append_eth(&mut pattern_rules);
+        flow_item::append_end(&mut pattern_rules);
+        add_redirect(self.port, 0, 1, LOW_PRIORITY, &pattern_rules)?;
         // drop_eth_traffic(self.port, 0, LOW_PRIORITY)?;
 
         Ok(())
@@ -314,6 +318,7 @@ fn install_pattern(
     } 
 }
 
+/*
 // ADDED
 fn add_masked_redirects(port: &Port, from_group: u32) -> Result<()> {
     let mask: u16 = 0x000F; // low 4 bits
@@ -324,6 +329,7 @@ fn add_masked_redirects(port: &Port, from_group: u32) -> Result<()> {
     }
     Ok(())
 }
+
 
 fn add_masked_redirect(
     port: &Port,
@@ -413,7 +419,7 @@ fn add_masked_redirect(
 
     Ok(())
 }
-
+*/
 
 fn create_rule(
     lpattern: &LayeredPattern,
@@ -544,13 +550,17 @@ fn add_redirect_for_pattern(
 }
 */
 
-fn add_redirect(port: &Port, from_group: u32, to_group: u32, priority: u32) -> Result<()> {
+fn add_redirect(
+    port: &Port,
+    from_group: u32,
+    to_group: u32,
+    priority: u32,
+    pattern_rules: &PatternRules,
+) -> Result<()> {
     let attr = FlowAttribute::new(from_group, priority);
 
-    // Pattern matches all Ethernet traffic
-    let mut pattern_rules: PatternRules = vec![];
-    flow_item::append_eth(&mut pattern_rules);
-    flow_item::append_end(&mut pattern_rules);
+    // @ALIYA - changed this so that the pattern is specified by the caller,
+    // vs. redirecting ALL traffic.
 
     // Set action to redirect
     let mut action = FlowAction::new(port.id);
@@ -678,4 +688,94 @@ pub(crate) fn flush_rules(port: &Port) {
             );
         }
     }
+}
+
+
+// This uses the port mask approach, which is a bit hacky --
+// if we could pipe in an RSS result, that would be better, but it's
+// less likely to be supported by all NICs, and it's hard to figure out.
+pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
+    // 1. Install redirects in tables 2..16
+    // Redirects only to groups 2..=14
+    for group in 2..15 // 2..=14
+    {
+        // Make group 2 map to nibble 0, group 14 -> nibble 12
+        let nibble = (group - 2) as u16;      // 0..12
+        let item = flow_item::build_tcp_port_mask(nibble, 0x000F);
+
+        // All tcp packets with LSBs == `group - 1`
+        // (Not sure if this is the right bit math)
+        //let item = flow_item::build_tcp_port_mask(group - 1, 0x000F);
+
+        // Have to build the pattern here so that pointers to fields in `item`
+        // are still in scope when rule is installed.
+        let mut p_item: dpdk::rte_flow_item = unsafe { mem::zeroed() };
+        p_item.type_ = item.item_type();
+        p_item.spec = item.spec();
+        p_item.mask = item.mask();
+
+        // In DPDK-land
+        let mut pattern = vec![];
+        flow_item::append_eth(&mut pattern);
+        pattern.push(p_item);
+        flow_item::append_end(&mut pattern);
+
+        let _ = add_redirect(port, 0, group as u32, HIGH_PRIORITY, &pattern);
+
+        // Repeat for UDP
+    }
+
+    // 2. Install RSS with LOW_PRIORITY on all other tables
+    for group in 2..16
+    /* replace with NUM_TABLES */
+    {
+        // Low priority on table N
+        let attr = FlowAttribute::new(group, LOW_PRIORITY);
+        // Action: RSS
+        let mut action = FlowAction::new(port.id);
+        action.append_rss();
+        action.finish();
+        // All Ethernet traffic
+        let mut pattern_rules: PatternRules = vec![];
+        flow_item::append_eth(&mut pattern_rules);
+        flow_item::append_end(&mut pattern_rules);
+
+        // Everything below is copy-pasted from `create_rule` (obviously could be decomposed)
+        let reta_raw = port.reta.iter().map(|q| q.raw()).collect::<Vec<_>>();
+        for a in action.rules.iter_mut() {
+            if let dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_RSS = a.type_ {
+                action.rss[0].queue_num = port.queue_map.len() as u32;
+                action.rss[0].queue = reta_raw.as_ptr();
+                a.conf = &action.rss[0] as *const _ as *const c_void;
+            }
+        }
+
+        let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
+        unsafe {
+            let ret = dpdk::rte_flow_validate(
+                port.id.raw(),
+                attr.raw() as *const _,
+                pattern_rules.as_ptr(),
+                action.rules.as_ptr(),
+                &mut error as *mut _,
+            );
+            if ret != 0 {
+                let _msg: &CStr = CStr::from_ptr(error.message);
+                // bail
+            } else {
+                let ret = dpdk::rte_flow_create(
+                    port.id.raw(),
+                    attr.raw() as *const _,
+                    pattern_rules.as_ptr(),
+                    action.rules.as_ptr(),
+                    &mut error as *mut _,
+                );
+                if ret.is_null() {
+                    let _msg: &CStr = CStr::from_ptr(error.message);
+                    // bail
+                }
+            }
+        }
+    }
+    Ok(())
 }

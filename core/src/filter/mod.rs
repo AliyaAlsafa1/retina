@@ -21,6 +21,7 @@ mod pattern;
 pub mod ptree;
 #[doc(hidden)]
 pub mod ptree_flat;
+pub mod flow_drop;
 
 pub mod datatypes;
 pub use datatypes::{DataType, Level, SubscriptionSpec};

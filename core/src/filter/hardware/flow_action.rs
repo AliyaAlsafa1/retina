@@ -89,4 +89,56 @@ impl FlowAction {
         a_drop.type_ = dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_DROP;
         self.rules.push(a_drop);
     }
+
+
+
+    /*
+    // @ALIYA - pseudocode for masked redirects
+    #[allow(dead_code)]
+    pub(super) fn append_masked_redirects(&mut self) {
+        // We conceptually create 16 buckets for the LS 4 bits (0x0..0xF) of src port.
+        // Each bucket jumps to a static table. We map them across tables 2..15, then wrap to 2..3.
+        
+        const FIRST_TABLE: u32 = 2;   // first jump group/table to use
+        const NUM_TABLES: u32 = 14;   // tables 2..15 inclusive
+
+        for bucket in 0..16u32 {
+            // Compute the group (table) to jump to for this bucket.
+            // 0 -> 2, 1 -> 3, ..., 13 -> 15, 14 -> 2, 15 -> 3
+            let group = FIRST_TABLE + (bucket % NUM_TABLES);
+
+            // Action: JUMP
+            let mut a_jump: dpdk::rte_flow_action = unsafe { mem::zeroed() };
+            a_jump.type_ = dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_JUMP;
+            self.rules.push(a_jump);
+
+            // Config for the JUMP action
+            let mut jump_conf: dpdk::rte_flow_action_jump = unsafe { mem::zeroed() };
+            jump_conf.group = group;
+            self.jump.push(jump_conf);
+        }
+
+        // Note: This only appends the actions/configs. The *pattern* side that matches
+        // (src port & 0x0F) == bucket must be built separately (e.g., in your FlowPattern).
+        // Also remember to call `finish()` to add the END terminator after composing actions.
+
+         
+        // Option 1 (preferred) would be to figure out how to do an RSS key
+        // and chain that into a jump rule.
+
+        // A simpler approach would be to create multiple jump rules
+        // that match on bits on the IP addresses or ports. We can't directly
+        // use a dynamic key in the jump rule, so we need something static that
+        // will still have some entropy.
+
+        // For example: mask on LS 4 bits of the src port = 4 bits = 16 values
+        // (14 tables (16 - table 0 - table 1) => wrap last two around)
+        // You'll append 16 rules here:
+        // - value: src port, mask: 0x0F, matches: [0x0000, 0x0001, ..., 0x000F]
+        // - action: jump to table [2, 3, ..., 15, 2, 3]
+
+        // Note - this won't be symmetric, so in software to pick a table
+        // we'll need to install each rule on two different tables.
+    }
+        */
 }

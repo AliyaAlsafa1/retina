@@ -27,29 +27,19 @@ fn find_table(five_tuple: &FiveTuple, num_tables: u32) -> u32 {
 }
 */
 
+const BASE_GROUP: u32 = 2;
+const LAST_GROUP: u32 = 14;
+const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
+const L4_LSB_MASK: u16 = 0x000F;
 
-/// Tables installed by the dynamic redirect:
-const BASE_GROUP: u32 = 2;        // groups 2..=14 installed
-const LAST_GROUP_EXCL: u32 = 15;  // exclusive upper bound (2..15)
-const L4_LSB_MASK: u16 = 0x000F;  // low 4 bits of dst port
-
-/// Return the hw group (table) this 5-tuple maps to, or 0 if no jump rule applies.
-/// Matches the rule: (dst_port & 0xF) == group - 1, groups in [2, 15].
+/// Returns a table in [2..=14] for TCP/UDP flows, mirroring the dynamic
+/// redirect logic. Never returns 0.
 fn find_table(tuple: &FiveTuple) -> u32 {
-    // 6 = TCP, 17 = UDP; others don't have redirect rules → stay in table 0.
-    let dst_port: u16 = match tuple.proto {
-        6 | 17 => tuple.resp.port(),   // destination port
-        _ => return 0,
+    let nibble = match tuple.proto {
+        6 | 17 => (tuple.resp.port() & L4_LSB_MASK) as u32, // dest-port low nibble
+        _ => 0, // if you ever call this for non-TCP/UDP, just bucket them too
     };
-
-    let nibble = (dst_port & L4_LSB_MASK) as u32; // 0..14
-    let group = nibble + 1;                       // because hw matches nibble == group - 1
-
-    if (BASE_GROUP..LAST_GROUP_EXCL).contains(&group) {
-        group                       // groups 2..=14
-    } else {
-        0                           // no jump rule → table 0
-    }
+    BASE_GROUP + (nibble % NUM_GROUPS) // always in 2..=14
 }
 
 // Take in vector of PortIds, FiveTuple to block, and returns a vector of flow pointers
@@ -185,7 +175,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
     ];
 
     // Create flow rule using pattern
-       for port_id in port_ids.iter() {
+    for port_id in port_ids.iter() {
         let mut error: rte_flow_error = unsafe { mem::zeroed() };
         
         let start = unsafe { dpdk::rte_rdtsc() };
@@ -216,6 +206,72 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
 
         println!("Installed DROP rule on port {}", port_id.raw());
         flows.push(flow);
+    }
+
+    // -------- REV (resp -> orig) --------
+    let rev = FiveTuple {
+        orig: tuple.resp,
+        resp: tuple.orig,
+        proto: tuple.proto,
+    };
+    attr.group = find_table(&rev);
+
+    // Swap addresses/ports in the SAME specs, then call create again
+    match (src_ip, dst_ip) {
+        (IpAddr::V4(src), IpAddr::V4(dst)) => {
+            ipv4_spec.hdr.src_addr = u32::from_ne_bytes(dst.octets()); // swap
+            ipv4_spec.hdr.dst_addr = u32::from_ne_bytes(src.octets());
+        }
+        (IpAddr::V6(src), IpAddr::V6(dst)) => {
+            ipv6_spec.hdr.src_addr = dpdk::rte_ipv6_addr { a: dst.octets() };
+            ipv6_spec.hdr.dst_addr = dpdk::rte_ipv6_addr { a: src.octets() };
+        }
+        _ => bail!("Mismatched IP versions"),
+    }
+
+    match tuple.proto {
+        TCP_PROTOCOL => {
+            tcp_spec.hdr.src_port = dst_port.to_be(); // swap
+            tcp_spec.hdr.dst_port = src_port.to_be();
+        }
+        UDP_PROTOCOL => {
+            udp_spec.hdr.src_port = dst_port.to_be(); // swap
+            udp_spec.hdr.dst_port = src_port.to_be();
+        }
+        _ => unreachable!(),
+    }
+
+    for port_id in port_ids.iter() {
+        let mut error_rev: rte_flow_error = unsafe { mem::zeroed() };
+        let start = unsafe { dpdk::rte_rdtsc() };
+        let flow_rev = unsafe {
+            rte_flow_create(
+                port_id.raw(),
+                &attr,
+                pattern.as_ptr(),
+                actions.as_ptr(),
+                &mut error_rev,
+            )
+        };
+        let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        println!("[REV] Latency (cycles): {}", duration);
+
+        if flow_rev.is_null() {
+            let msg = unsafe {
+                CStr::from_ptr(error_rev.message)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+
+            anyhow::bail!(
+                "Failed to install flow on port {}: {}",
+                port_id.raw(),
+                msg
+            );
+        }
+
+        println!("Installed REV DROP on port {} (group {})", port_id.raw(), attr.group);
+        flows.push(flow_rev);
     }
 
     Ok(flows)
@@ -259,6 +315,8 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
 
     Ok(())
 }
+
+
 
 /*
 // OLD VERSION

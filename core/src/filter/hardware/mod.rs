@@ -695,8 +695,36 @@ pub(crate) fn flush_rules(port: &Port) {
 // if we could pipe in an RSS result, that would be better, but it's
 // less likely to be supported by all NICs, and it's hard to figure out.
 pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
+    const BASE_GROUP: u32 = 2;
+    const LAST_GROUP: u32 = 14;
+    const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
+
+    for nibble in 0u16..=15 {
+        // Match packets whose dest L4 port has this low nibble
+        let item = flow_item::build_tcp_port_mask(nibble, 0x000F);
+
+        let mut p_item: dpdk::rte_flow_item = unsafe { mem::zeroed() };
+        p_item.type_ = item.item_type();
+        p_item.spec  = item.spec();
+        p_item.mask  = item.mask();
+
+        let mut pattern = Vec::new();
+        flow_item::append_eth(&mut pattern);
+        // (append IPv4/IPv6 if your PMD requires it)
+        pattern.push(p_item);
+        flow_item::append_end(&mut pattern);
+
+        // Compute destination group via modulo, exactly like find_table
+        let group = BASE_GROUP + ((nibble as u32) % NUM_GROUPS);
+
+        add_redirect(port, 0, group, HIGH_PRIORITY, &pattern)?;
+
+        // Repeat for UDP with build_udp_port_mask(nibble, 0x000F)
+    }
+
     // 1. Install redirects in tables 2..16
     // Redirects only to groups 2..=14
+    /*
     for group in 2..15 // 2..=14
     {
         // Make group 2 map to nibble 0, group 14 -> nibble 12
@@ -724,6 +752,7 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
 
         // Repeat for UDP
     }
+    */
 
     // 2. Install RSS with LOW_PRIORITY on all other tables
     for group in 2..16

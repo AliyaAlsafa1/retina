@@ -428,6 +428,135 @@ impl FlowPattern {
         Ok(())
     }
 
+    // ADDED
+    pub(super) fn append_masked_tcp(&mut self, predicates: &[Predicate]) -> Result<()> {
+        let mut tcp_spec: dpdk::rte_flow_item_tcp = unsafe { mem::zeroed() };
+        let mut tcp_mask: dpdk::rte_flow_item_tcp = unsafe { mem::zeroed() };
+
+        for pred in predicates.iter() {
+            match pred {
+                Predicate::Unary { .. } => bail!(FilterError::InvalidPredType("unary".to_owned())),
+                Predicate::Binary {
+                    protocol: _,
+                    field,
+                    op: _,
+                    value,
+                } => match field.name() {
+                    "src_port" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                tcp_spec.hdr.src_port = val.to_be();
+                                tcp_mask.hdr.src_port = 0x000F;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "dst_port" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                tcp_spec.hdr.dst_port = val.to_be();
+                                tcp_mask.hdr.dst_port = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "seq_no" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u32::try_from(*i) {
+                                tcp_spec.hdr.sent_seq = val.to_be();
+                                tcp_mask.hdr.sent_seq = u32::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                            tcp_spec.hdr.sent_seq = u32::try_from(*i).unwrap().to_be();
+                            tcp_mask.hdr.sent_seq = u32::MAX;
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "ack_no" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u32::try_from(*i) {
+                                tcp_spec.hdr.recv_ack = val.to_be();
+                                tcp_mask.hdr.recv_ack = u32::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "data_offset_to_nw" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u8::try_from(*i) {
+                                tcp_spec.hdr.data_off = val;
+                                tcp_mask.hdr.data_off = u8::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "flags" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u8::try_from(*i) {
+                                tcp_spec.hdr.tcp_flags = val;
+                                tcp_mask.hdr.tcp_flags = u8::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "window" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                tcp_spec.hdr.rx_win = val.to_be();
+                                tcp_mask.hdr.rx_win = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "checksum" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                tcp_spec.hdr.cksum = val.to_be();
+                                tcp_mask.hdr.cksum = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "urgent_pointer" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                tcp_spec.hdr.tcp_urp = val.to_be();
+                                tcp_mask.hdr.tcp_urp = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    _ => bail!(FilterError::InvalidField(field.name().to_owned())),
+                },
+            }
+        }
+
+        let tcp_item = FlowItem::<dpdk::rte_flow_item_tcp> {
+            item_type: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_TCP,
+            spec: tcp_spec,
+            mask: tcp_mask,
+        };
+        self.items.push(Box::new(tcp_item));
+        Ok(())
+    }
+
     pub(super) fn append_udp(&mut self, predicates: &[Predicate]) -> Result<()> {
         let mut udp_spec: dpdk::rte_flow_item_udp = unsafe { mem::zeroed() };
         let mut udp_mask: dpdk::rte_flow_item_udp = unsafe { mem::zeroed() };
@@ -498,4 +627,78 @@ impl FlowPattern {
         self.items.push(Box::new(udp_item));
         Ok(())
     }
+
+    // ADDED
+    /*
+    pub(super) fn append_masked_udp(&mut self, predicates: &[Predicate]) -> Result<()> {
+        let mut udp_spec: dpdk::rte_flow_item_udp = unsafe { mem::zeroed() };
+        let mut udp_mask: dpdk::rte_flow_item_udp = unsafe { mem::zeroed() };
+
+        for pred in predicates.iter() {
+            match pred {
+                Predicate::Unary { .. } => bail!(FilterError::InvalidPredType("unary".to_owned())),
+                Predicate::Binary {
+                    protocol: _,
+                    field,
+                    op: _,
+                    value,
+                } => match field.name() {
+                    "src_port" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                udp_spec.hdr.src_port = val.to_be();
+                                udp_mask.hdr.src_port = 0x000F;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "dst_port" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                udp_spec.hdr.dst_port = val.to_be();
+                                udp_mask.hdr.dst_port = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "length" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                udp_spec.hdr.dgram_len = val.to_be();
+                                udp_mask.hdr.dgram_len = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    "checksum" => match value {
+                        Value::Int(i) => {
+                            if let Ok(val) = u16::try_from(*i) {
+                                udp_spec.hdr.dgram_cksum = val.to_be();
+                                udp_mask.hdr.dgram_cksum = u16::MAX;
+                            } else {
+                                bail!(FilterError::InvalidRhsValue(value.to_string()))
+                            }
+                        }
+                        _ => bail!(FilterError::InvalidRhsType(value.to_string())),
+                    },
+                    _ => bail!(FilterError::InvalidField(field.name().to_owned())),
+                },
+            }
+        }
+
+        let udp_item = FlowItem::<dpdk::rte_flow_item_udp> {
+            item_type: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_UDP,
+            spec: udp_spec,
+            mask: udp_mask,
+        };
+        self.items.push(Box::new(udp_item));
+        Ok(())
+    }
+        */
 }

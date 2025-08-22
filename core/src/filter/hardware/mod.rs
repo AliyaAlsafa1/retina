@@ -28,7 +28,13 @@ const LOW_PRIORITY: u32 = 3;
 
 #[derive(Debug)]
 pub(crate) struct HardwareFilter<'a> {
+    // Patterns that will retain traffic, as layered patterns,
+    // with only predicates supported by the NIC retained.
+    // Any traffic not matching a pattern will be dropped
+    // by the NIC.
     patterns: Vec<LayeredPattern>,
+    // Port to install filter on.
+    // We expect each port to install the HW filter at startup.
     port: &'a Port,
 }
 
@@ -66,6 +72,7 @@ impl<'a> HardwareFilter<'a> {
         layered.sort();
         layered.dedup();
 
+        
         HardwareFilter {
             patterns: layered,
             port,
@@ -82,8 +89,21 @@ impl<'a> HardwareFilter<'a> {
 
         info!("Applying hardware filter rules on Port {}...", self.port.id);
         for pattern in self.patterns.iter() {
+            // Traffic matching installed patterns will be redirected
+            // to a core via RSS.
+
+            // @ALIYA - MODIFY CODE IN INSTALL_PATTERN
+            // --> Goal is to change the result of this pattern to "redirect"
+
             install_pattern(pattern, self.port, 0, HIGH_PRIORITY)?;
         }
+
+        // @ALIYA - add logic here to install a default (low priority)
+        // RSS rule on each table (except table 1, which we're
+        // using to drop traffic)
+
+        let _ = add_masked_redirects(self.port, 0);
+
         // Non-matching traffic will be dropped by default on table 1
         // Redirect is faster than using a default DROP rule
         add_redirect(self.port, 0, 1, LOW_PRIORITY)?;
@@ -243,6 +263,9 @@ fn validate_rule(
     }
 }
 
+/*
+// ORIGINAL
+
 fn install_pattern(
     lpattern: &LayeredPattern,
     port: &Port,
@@ -262,6 +285,135 @@ fn install_pattern(
         bail!(HardwareFilterError::InvalidRule(lpattern.to_owned()));
     }
 }
+*/
+
+// Changed this to install jump rule to Table >= 2, use same logic in Table 2 now.
+fn install_pattern(
+    lpattern: &LayeredPattern,
+    port: &Port,
+    group: u32,
+    priority: u32,
+) -> Result<()> {
+    // Pick the table this pattern should land in
+    //let target_table = choose_table(lpattern, NUM_TABLES);
+
+    let attr = FlowAttribute::new(group, priority);
+
+    // First: install redirect for this pattern (pattern match → jump to chosen table)
+    //let _ = add_redirect_for_pattern(port, lpattern, 0, target_table, LOW_PRIORITY);
+
+    if let Ok(mut pattern) = FlowPattern::from_layered_pattern(lpattern) {
+        let mut action = FlowAction::new(port.id);
+
+        action.append_rss();
+        action.finish();
+
+        create_rule(lpattern, port, attr, &mut pattern, &mut action)
+    } else {
+        bail!(HardwareFilterError::InvalidRule(lpattern.to_owned()));
+    } 
+}
+
+// ADDED
+fn add_masked_redirects(port: &Port, from_group: u32) -> Result<()> {
+    let mask: u16 = 0x000F; // low 4 bits
+    for bitval in 0..16 {
+        let value = bitval as u16;
+        let to_group = 2 + (bitval % 13); // maps to 2..=14
+        add_masked_redirect(port, from_group, to_group, HIGH_PRIORITY, mask, value)?;
+    }
+    Ok(())
+}
+
+fn add_masked_redirect(
+    port: &Port,
+    from_group: u32,
+    to_group: u32,
+    priority: u32,
+    _mask: u16,
+    value: u16,
+) -> Result<()> {
+    println!(
+        "[masked redirect] from_group={} → to_group={} (value=0x{:04x}, priority={})",
+        from_group, to_group, value, priority
+    );
+
+    let attr = FlowAttribute::new(from_group, priority);
+
+    // Start building pattern
+    let mut pattern = FlowPattern::default();
+    pattern.append_eth()?;
+    pattern.append_ipv4()?; // If needed
+
+    // Add custom TCP predicate based on src_port low 4 bits
+    let predicate = Predicate::Binary {
+        protocol: Protocol::Tcp,
+        field: Field::with_name("src_port"),
+        op: Operator::Eq,
+        value: Value::Int(value as i64),
+    };
+
+    pattern.append_masked_tcp(&[predicate])?;
+    pattern.append_end()?;
+
+    // Set action to redirect
+    let mut action = FlowAction::new(port.id);
+    action.append_jump(to_group);
+    action.finish();
+
+    for a in action.rules.iter_mut() {
+        if a.type_ == dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_JUMP {
+            a.conf = &action.jump[0] as *const _ as *const c_void;
+        }
+    }
+
+    info!(
+        "Setting port {} to redirect from group {} to {}...",
+        port.id, from_group, to_group
+    );
+
+    let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
+
+    unsafe {
+        let ret = dpdk::rte_flow_validate(
+            port.id.raw(),
+            attr.raw() as *const _,
+            pattern.as_ptr(),
+            action.rules.as_ptr(),
+            &mut error,
+        );
+        if ret != 0 {
+            let msg = CStr::from_ptr(error.message).to_string_lossy().to_string();
+            error!("Redirect rule failed validation: {}", msg);
+            bail!(HardwareFilterError::Validation {
+                lpattern: LayeredPattern::new(),
+                reason: msg,
+            });
+        }
+
+        let flow = dpdk::rte_flow_create(
+            port.id.raw(),
+            attr.raw() as *const _,
+            pattern.as_ptr(),
+            action.rules.as_ptr(),
+            &mut error,
+        );
+
+        if flow.is_null() {
+            let msg = CStr::from_ptr(error.message).to_string_lossy().to_string();
+            error!("Redirect rule failed creation: {}", msg);
+            bail!(HardwareFilterError::Creation {
+                lpattern: LayeredPattern::new(),
+                reason: msg,
+            });
+        } else {
+            info!("Created hardware flow rule for redirect.");
+        }
+    }
+
+    Ok(())
+}
+
 
 fn create_rule(
     lpattern: &LayeredPattern,
@@ -328,6 +480,69 @@ fn create_rule(
         }
     }
 }
+
+// ADDED
+/*
+fn add_redirect_for_pattern(
+    port: &Port,
+    lpattern: &LayeredPattern,
+    from_group: u32,
+    to_group: u32,
+    priority: u32,
+) -> Result<()> {
+    let attr = FlowAttribute::new(from_group, priority);
+
+    // convert LayeredPattern -> FlowPattern -> rte_flow_item
+    let mut pattern_rules: PatternRules = vec![];
+    flow_item::append_eth(&mut pattern_rules);
+    let pattern = FlowPattern::from_layered_pattern(lpattern)?;
+    for item in pattern.items.iter() {
+        let mut p_item: dpdk::rte_flow_item = unsafe { mem::zeroed() };
+        p_item.type_ = item.item_type();
+        p_item.spec = item.spec();
+        p_item.mask = item.mask();
+        pattern_rules.push(p_item);
+    }
+    flow_item::append_end(&mut pattern_rules);
+
+    let mut action = FlowAction::new(port.id);
+    action.append_jump(to_group);
+    action.finish();
+    for a in action.rules.iter_mut() {
+        if let dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_JUMP = a.type_ {
+            a.conf = &action.jump[0] as *const _ as *const c_void;
+        }
+    }
+
+    let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
+    unsafe {
+        let ret = dpdk::rte_flow_validate(
+            port.id.raw(),
+            attr.raw() as *const _,
+            pattern_rules.as_ptr(),
+            action.rules.as_ptr(),
+            &mut error as *mut _,
+        );
+        if ret != 0 {
+            let msg = CStr::from_ptr(error.message).to_string_lossy();
+            bail!("Redirect validation failed: {}", msg);
+        }
+        let ret = dpdk::rte_flow_create(
+            port.id.raw(),
+            attr.raw() as *const _,
+            pattern_rules.as_ptr(),
+            action.rules.as_ptr(),
+            &mut error as *mut _,
+        );
+        if ret.is_null() {
+            let msg = CStr::from_ptr(error.message).to_string_lossy();
+            bail!("Redirect creation failed: {}", msg);
+        }
+    }
+
+    Ok(())
+}
+*/
 
 fn add_redirect(port: &Port, from_group: u32, to_group: u32, priority: u32) -> Result<()> {
     let attr = FlowAttribute::new(from_group, priority);

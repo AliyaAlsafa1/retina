@@ -28,7 +28,7 @@ pub(crate) const SYMMETRIC_RSS_KEY: [u8; 52] = [
 const RSS_RETA_SIZE: usize = 512;
 
 #[derive(Debug, Copy, Clone, Hash, Ord, Eq, PartialEq, PartialOrd)]
-pub(crate) struct PortId(pub(crate) u16);
+pub struct PortId(pub u16);
 
 impl PortId {
     pub fn new_from_device(device: String) -> PortId {

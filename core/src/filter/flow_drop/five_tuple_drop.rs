@@ -28,11 +28,28 @@ fn find_table(five_tuple: &FiveTuple, num_tables: u32) -> u32 {
 */
 
 
-/// Map a FiveTuple to the same table group that masked redirects use.
+/// Tables installed by the dynamic redirect:
+const BASE_GROUP: u32 = 2;        // groups 2..=14 installed
+const LAST_GROUP_EXCL: u32 = 15;  // exclusive upper bound (2..15)
+const L4_LSB_MASK: u16 = 0x000F;  // low 4 bits of dst port
+
+/// Return the hw group (table) this 5-tuple maps to, or 0 if no jump rule applies.
+/// Matches the rule: (dst_port & 0xF) == group - 1, groups in [2, 15].
 fn find_table(tuple: &FiveTuple) -> u32 {
-    let src_port = tuple.orig.port();
-    let low_bits = (src_port & 0x0F) as u32;
-    2 + (low_bits % 13) // maps to group 2..=14
+    // 6 = TCP, 17 = UDP; others don't have redirect rules → stay in table 0.
+    let dst_port: u16 = match tuple.proto {
+        6 | 17 => tuple.resp.port(),   // destination port
+        _ => return 0,
+    };
+
+    let nibble = (dst_port & L4_LSB_MASK) as u32; // 0..14
+    let group = nibble + 1;                       // because hw matches nibble == group - 1
+
+    if (BASE_GROUP..LAST_GROUP_EXCL).contains(&group) {
+        group                       // groups 2..=14
+    } else {
+        0                           // no jump rule → table 0
+    }
 }
 
 // Take in vector of PortIds, FiveTuple to block, and returns a vector of flow pointers
@@ -43,6 +60,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
     let mut attr: rte_flow_attr = unsafe { mem::zeroed() };
     attr.set_ingress(1);
     attr.group = find_table(tuple);
+    //attr.group = 0;
     println!("Installing rule for tuple {:?} in group {}", tuple, attr.group);
     attr.priority = 0;
 

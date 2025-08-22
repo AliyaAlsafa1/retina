@@ -35,6 +35,7 @@ use crate::memory::mbuf::Mbuf;
 use crate::port::Port;
 use crate::protocols::stream::{ConnData, Session};
 use crate::subscription::Trackable;
+use crate::filter::hardware::install_dyn_hardware_rules;
 
 use std::fmt;
 
@@ -161,6 +162,13 @@ impl Filter {
     pub fn is_hardware_filterable(&self) -> bool {
         // needs to take port as argument
         todo!();
+    }
+
+    // ADDED
+    pub(crate) fn set_dynamic_hardware_filters(&self, port: &Port) -> Result<()> {
+        // Call a new API that JUST installs jump rules on table 0
+        // and RSS rules (low priority) on table N>=2
+        install_dyn_hardware_rules(port)
     }
 
     pub(crate) fn set_hardware_filter(&self, port: &Port) -> Result<()> {

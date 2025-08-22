@@ -327,6 +327,19 @@ pub struct OnlineConfig {
     #[serde(default = "default_hardware_assist")]
     pub hardware_assist: bool,
 
+    /// @ALIYA add `dyn_hardware_assist` to the config options
+    /// (with documentation).
+    /// When OnlineConfig is loaded (look at the `runtime`), assert that
+    /// if dyn_hardware_assist is on, then hardware_assist is off.
+
+    /// If set, enables *dynamic* hardware assist (masked L4-port jump on table 0
+    /// and low-priority RSS rules on tables N ≥ 2). This is **mutually exclusive**
+    /// with `hardware_assist`. Prefer this when your NIC supports masked L4 port
+    /// matches + JUMP and you want per-bucket distribution in hardware.
+    /// Defaults to `false`.
+    #[serde(default = "default_dyn_hardware_assist")]
+    pub dyn_hardware_assist: bool,
+
     /// If set, will pass supplementary arguments to DPDK EAL (see DPDK
     /// configuration). For instance `--no-huge`.
     /// Defaults to empty string.
@@ -352,6 +365,11 @@ fn default_duration() -> Option<u64> {
 
 fn default_hardware_assist() -> bool {
     true
+}
+
+// ADDED
+fn default_dyn_hardware_assist() -> bool {
+    false
 }
 
 fn default_dpdk_supl_args() -> Vec<String> {

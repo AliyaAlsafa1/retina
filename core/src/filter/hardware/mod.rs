@@ -13,10 +13,12 @@ use super::Filter;
 
 use crate::dpdk;
 use crate::port::*;
+ use crate::dpdk::rte_flow_item;
 
 use std::ffi::{c_void, CStr};
 use std::fmt;
 use std::mem;
+use std::ptr;
 
 use anyhow::{bail, Result};
 use log::{debug, error, info, warn};
@@ -92,21 +94,12 @@ impl<'a> HardwareFilter<'a> {
             // Traffic matching installed patterns will be redirected
             // to a core via RSS.
 
-            // @ALIYA - MODIFY CODE IN INSTALL_PATTERN
-            // --> Goal is to change the result of this pattern to "redirect"
-
             install_pattern(pattern, self.port, 0, HIGH_PRIORITY)?;
         }
 
-        // @ALIYA - add logic here to install a default (low priority)
-        // RSS rule on each table (except table 1, which we're
-        // using to drop traffic)
-
-        //let _ = add_masked_redirects(self.port, 0);
-
         // Non-matching traffic will be dropped by default on table 1
         // Redirect is faster than using a default DROP rule
-                // Pattern matches all Ethernet traffic
+        // Pattern matches all Ethernet traffic
         let mut pattern_rules: PatternRules = vec![];
         flow_item::append_eth(&mut pattern_rules);
         flow_item::append_end(&mut pattern_rules);
@@ -291,23 +284,17 @@ fn install_pattern(
 }
 */
 
-// Changed this to install jump rule to Table >= 2, use same logic in Table 2 now.
+// Back to original
 fn install_pattern(
     lpattern: &LayeredPattern,
     port: &Port,
     group: u32,
     priority: u32,
 ) -> Result<()> {
-    // Pick the table this pattern should land in
-    //let target_table = choose_table(lpattern, NUM_TABLES);
-
     let attr = FlowAttribute::new(group, priority);
-
-    // First: install redirect for this pattern (pattern match → jump to chosen table)
-    //let _ = add_redirect_for_pattern(port, lpattern, 0, target_table, LOW_PRIORITY);
-
     if let Ok(mut pattern) = FlowPattern::from_layered_pattern(lpattern) {
         let mut action = FlowAction::new(port.id);
+        // action.append_mark(tag as u32);
 
         action.append_rss();
         action.finish();
@@ -315,111 +302,8 @@ fn install_pattern(
         create_rule(lpattern, port, attr, &mut pattern, &mut action)
     } else {
         bail!(HardwareFilterError::InvalidRule(lpattern.to_owned()));
-    } 
-}
-
-/*
-// ADDED
-fn add_masked_redirects(port: &Port, from_group: u32) -> Result<()> {
-    let mask: u16 = 0x000F; // low 4 bits
-    for bitval in 0..16 {
-        let value = bitval as u16;
-        let to_group = 2 + (bitval % 13); // maps to 2..=14
-        add_masked_redirect(port, from_group, to_group, HIGH_PRIORITY, mask, value)?;
     }
-    Ok(())
 }
-
-
-fn add_masked_redirect(
-    port: &Port,
-    from_group: u32,
-    to_group: u32,
-    priority: u32,
-    _mask: u16,
-    value: u16,
-) -> Result<()> {
-    println!(
-        "[masked redirect] from_group={} → to_group={} (value=0x{:04x}, priority={})",
-        from_group, to_group, value, priority
-    );
-
-    let attr = FlowAttribute::new(from_group, priority);
-
-    // Start building pattern
-    let mut pattern = FlowPattern::default();
-    pattern.append_eth()?;
-    pattern.append_ipv4()?; // If needed
-
-    // Add custom TCP predicate based on src_port low 4 bits
-    let predicate = Predicate::Binary {
-        protocol: Protocol::Tcp,
-        field: Field::with_name("src_port"),
-        op: Operator::Eq,
-        value: Value::Int(value as i64),
-    };
-
-    pattern.append_masked_tcp(&[predicate])?;
-    pattern.append_end()?;
-
-    // Set action to redirect
-    let mut action = FlowAction::new(port.id);
-    action.append_jump(to_group);
-    action.finish();
-
-    for a in action.rules.iter_mut() {
-        if a.type_ == dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_JUMP {
-            a.conf = &action.jump[0] as *const _ as *const c_void;
-        }
-    }
-
-    info!(
-        "Setting port {} to redirect from group {} to {}...",
-        port.id, from_group, to_group
-    );
-
-    let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
-
-    unsafe {
-        let ret = dpdk::rte_flow_validate(
-            port.id.raw(),
-            attr.raw() as *const _,
-            pattern.as_ptr(),
-            action.rules.as_ptr(),
-            &mut error,
-        );
-        if ret != 0 {
-            let msg = CStr::from_ptr(error.message).to_string_lossy().to_string();
-            error!("Redirect rule failed validation: {}", msg);
-            bail!(HardwareFilterError::Validation {
-                lpattern: LayeredPattern::new(),
-                reason: msg,
-            });
-        }
-
-        let flow = dpdk::rte_flow_create(
-            port.id.raw(),
-            attr.raw() as *const _,
-            pattern.as_ptr(),
-            action.rules.as_ptr(),
-            &mut error,
-        );
-
-        if flow.is_null() {
-            let msg = CStr::from_ptr(error.message).to_string_lossy().to_string();
-            error!("Redirect rule failed creation: {}", msg);
-            bail!(HardwareFilterError::Creation {
-                lpattern: LayeredPattern::new(),
-                reason: msg,
-            });
-        } else {
-            info!("Created hardware flow rule for redirect.");
-        }
-    }
-
-    Ok(())
-}
-*/
 
 fn create_rule(
     lpattern: &LayeredPattern,
@@ -487,75 +371,12 @@ fn create_rule(
     }
 }
 
-// ADDED
-/*
-fn add_redirect_for_pattern(
-    port: &Port,
-    lpattern: &LayeredPattern,
-    from_group: u32,
-    to_group: u32,
-    priority: u32,
-) -> Result<()> {
-    let attr = FlowAttribute::new(from_group, priority);
-
-    // convert LayeredPattern -> FlowPattern -> rte_flow_item
-    let mut pattern_rules: PatternRules = vec![];
-    flow_item::append_eth(&mut pattern_rules);
-    let pattern = FlowPattern::from_layered_pattern(lpattern)?;
-    for item in pattern.items.iter() {
-        let mut p_item: dpdk::rte_flow_item = unsafe { mem::zeroed() };
-        p_item.type_ = item.item_type();
-        p_item.spec = item.spec();
-        p_item.mask = item.mask();
-        pattern_rules.push(p_item);
-    }
-    flow_item::append_end(&mut pattern_rules);
-
-    let mut action = FlowAction::new(port.id);
-    action.append_jump(to_group);
-    action.finish();
-    for a in action.rules.iter_mut() {
-        if let dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_JUMP = a.type_ {
-            a.conf = &action.jump[0] as *const _ as *const c_void;
-        }
-    }
-
-    let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
-    unsafe {
-        let ret = dpdk::rte_flow_validate(
-            port.id.raw(),
-            attr.raw() as *const _,
-            pattern_rules.as_ptr(),
-            action.rules.as_ptr(),
-            &mut error as *mut _,
-        );
-        if ret != 0 {
-            let msg = CStr::from_ptr(error.message).to_string_lossy();
-            bail!("Redirect validation failed: {}", msg);
-        }
-        let ret = dpdk::rte_flow_create(
-            port.id.raw(),
-            attr.raw() as *const _,
-            pattern_rules.as_ptr(),
-            action.rules.as_ptr(),
-            &mut error as *mut _,
-        );
-        if ret.is_null() {
-            let msg = CStr::from_ptr(error.message).to_string_lossy();
-            bail!("Redirect creation failed: {}", msg);
-        }
-    }
-
-    Ok(())
-}
-*/
-
 fn add_redirect(
     port: &Port,
     from_group: u32,
     to_group: u32,
     priority: u32,
-    pattern_rules: &PatternRules,
+    pattern_rules: &[rte_flow_item],
 ) -> Result<()> {
     let attr = FlowAttribute::new(from_group, priority);
 
@@ -691,72 +512,153 @@ pub(crate) fn flush_rules(port: &Port) {
 }
 
 
+// DECLARING CONSTS HERE FOR EASE... will move up later
+const BASE_GROUP: u32 = 2;
+const LAST_GROUP: u32 = 14;
+const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
+
+// Debug
+#[inline]
+fn item_type_str(t: u32) -> &'static str {
+    use dpdk::*;
+    match t {
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_ETH   => "ETH",
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_IPV4  => "IPv4",
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_IPV6  => "IPv6",
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_TCP   => "TCP",
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_UDP   => "UDP",
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_VOID  => "VOID",
+        x if x == rte_flow_item_type_RTE_FLOW_ITEM_TYPE_END   => "END",
+        _ => "UNKNOWN",
+    }
+}
+
+// Debug
+#[inline]
+fn action_type_str(t: u32) -> &'static str {
+    use dpdk::*;
+    match t {
+        x if x == rte_flow_action_type_RTE_FLOW_ACTION_TYPE_RSS => "RSS",
+        x if x == rte_flow_action_type_RTE_FLOW_ACTION_TYPE_DROP => "DROP",
+        x if x == rte_flow_action_type_RTE_FLOW_ACTION_TYPE_JUMP => "JUMP",
+        x if x == rte_flow_action_type_RTE_FLOW_ACTION_TYPE_QUEUE => "QUEUE",
+        x if x == rte_flow_action_type_RTE_FLOW_ACTION_TYPE_MARK => "MARK",
+        x if x == rte_flow_action_type_RTE_FLOW_ACTION_TYPE_END => "END",
+        _ => "UNKNOWN",
+    }
+}
+
+// Debug
+fn dump_pattern(label: &str, pat: &[rte_flow_item]) {
+    println!("  {} pattern (len={}):", label, pat.len());
+    for (idx, it) in pat.iter().enumerate() {
+        println!(
+            "    [{:02}] {:<5} spec={:p} mask={:p} last={:p}",
+            idx,
+            item_type_str(it.type_ as u32),
+            it.spec,
+            it.mask,
+            it.last
+        );
+    }
+
+    // Light sanity: check if the last is END!
+    if let Some(last) = pat.last() {
+        let is_end = last.type_ == dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_END;
+        println!("    -> last is END: {}", is_end);
+    }
+}
+
 // This uses the port mask approach, which is a bit hacky --
 // if we could pipe in an RSS result, that would be better, but it's
 // less likely to be supported by all NICs, and it's hard to figure out.
 pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
-    const BASE_GROUP: u32 = 2;
-    const LAST_GROUP: u32 = 14;
-    const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
+    // Debug output
+    println!(
+        "install_dyn_hardware_rules: port_id={}, BASE_GROUP={}, LAST_GROUP={}, NUM_GROUPS={}",
+        port.id.raw(),
+        BASE_GROUP,
+        LAST_GROUP,
+        NUM_GROUPS
+    );
 
-    for nibble in 0u16..=15 {
+    for nibble in 0u16..=15 { // Nibble is the lower 4 bits of the port
+        // Compute destination group via modulo
+        let group = BASE_GROUP + ((nibble as u32) % NUM_GROUPS);
+        println!("\n[nibble={:#X} ({})] -> dst_group={}", nibble, nibble, group);
+
+        // Pattern buffer structure is ETH + [IP] + [L4] + END
+        let mut pattern: [rte_flow_item; 5] = unsafe { mem::zeroed() };
+        let mut i = 0;
+
+        // ETH
+        pattern[i] = rte_flow_item {
+            type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_ETH,
+            spec: ptr::null(),
+            mask: ptr::null(),
+            last: ptr::null(),
+        };
+        i += 1;
+
+        // IP
+        pattern[i] = rte_flow_item {
+            type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_IPV4,
+            spec: ptr::null(),
+            mask: ptr::null(),
+            last: ptr::null(),
+        };
+        i += 1;
+
         // Match packets whose dest L4 port has this low nibble
         let item = flow_item::build_tcp_port_mask(nibble, 0x000F);
 
-        let mut p_item: dpdk::rte_flow_item = unsafe { mem::zeroed() };
-        p_item.type_ = item.item_type();
-        p_item.spec  = item.spec();
-        p_item.mask  = item.mask();
+        pattern[i] = rte_flow_item {
+            type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_TCP, // may be redundant 
+            spec: item.spec(),
+            mask: item.mask(),
+            last: ptr::null(),
+        };
+        i += 1;
 
-        let mut pattern = Vec::new();
-        flow_item::append_eth(&mut pattern);
-        // (append IPv4/IPv6 if your PMD requires it)
-        pattern.push(p_item);
-        flow_item::append_end(&mut pattern);
+        // END
+        pattern[i] = rte_flow_item {
+            type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_END,
+            spec: ptr::null(),
+            mask: ptr::null(),
+            last: ptr::null(),
+        };
 
-        // Compute destination group via modulo, exactly like find_table
-        let group = BASE_GROUP + ((nibble as u32) % NUM_GROUPS);
+        // Dump + Install
+        dump_pattern("TCP", &pattern[..=i]);
+        println!(
+            "  add_redirect TCP: src_group=0 -> dst_group={} priority={} (nibble={:#X})",
+            group, HIGH_PRIORITY, nibble
+        );
+        add_redirect(port, 0, group, HIGH_PRIORITY, &pattern[..=i])?;
 
-        add_redirect(port, 0, group, HIGH_PRIORITY, &pattern)?;
+        // REPEAT for UDP BELOW //
 
-        // Repeat for UDP with build_udp_port_mask(nibble, 0x000F)
+        /*
+        i = 0;
+        i += 1;
+        i += 1;
+
+        let item = flow_item::build_udp_port_mask(nibble, 0x000F);
+
+        pattern[i] = rte_flow_item {
+            type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_UDP, // redundant 
+            spec: item.spec(),
+            mask: item.mask(),
+            last: ptr::null(),
+        };
+        i += 1;
+
+        add_redirect(port, 0, group, HIGH_PRIORITY, &pattern[..=i])?;
+        */
     }
 
-    // 1. Install redirects in tables 2..16
-    // Redirects only to groups 2..=14
-    /*
-    for group in 2..15 // 2..=14
-    {
-        // Make group 2 map to nibble 0, group 14 -> nibble 12
-        let nibble = (group - 2) as u16;      // 0..12
-        let item = flow_item::build_tcp_port_mask(nibble, 0x000F);
-
-        // All tcp packets with LSBs == `group - 1`
-        // (Not sure if this is the right bit math)
-        //let item = flow_item::build_tcp_port_mask(group - 1, 0x000F);
-
-        // Have to build the pattern here so that pointers to fields in `item`
-        // are still in scope when rule is installed.
-        let mut p_item: dpdk::rte_flow_item = unsafe { mem::zeroed() };
-        p_item.type_ = item.item_type();
-        p_item.spec = item.spec();
-        p_item.mask = item.mask();
-
-        // In DPDK-land
-        let mut pattern = vec![];
-        flow_item::append_eth(&mut pattern);
-        pattern.push(p_item);
-        flow_item::append_end(&mut pattern);
-
-        let _ = add_redirect(port, 0, group as u32, HIGH_PRIORITY, &pattern);
-
-        // Repeat for UDP
-    }
-    */
-
-    // 2. Install RSS with LOW_PRIORITY on all other tables
     for group in 2..16
-    /* replace with NUM_TABLES */
+    // replace with NUM_TABLES eventually
     {
         // Low priority on table N
         let attr = FlowAttribute::new(group, LOW_PRIORITY);
@@ -769,6 +671,29 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
         flow_item::append_eth(&mut pattern_rules);
         flow_item::append_end(&mut pattern_rules);
 
+        // --- brief debug: pattern + actions (pre-RSS wiring)
+        println!(
+            "[base RSS] port={} group={} prio={} pattern_len={} actions_len={}",
+            port.id.raw(),
+            group,
+            LOW_PRIORITY,
+            pattern_rules.len(),
+            action.rules.len()
+        );
+        print!("  pattern: [");
+        for (k, it) in pattern_rules.iter().enumerate() {
+            if k > 0 { print!(", "); }
+            print!("{}", item_type_str(it.type_ as u32));
+        }
+        println!("]"); // ends line
+
+        print!("  actions: [");
+        for (k, a) in action.rules.iter().enumerate() {
+            if k > 0 { print!(", "); }
+            print!("{}", action_type_str(a.type_ as u32));
+        }
+        println!("]");
+
         // Everything below is copy-pasted from `create_rule` (obviously could be decomposed)
         let reta_raw = port.reta.iter().map(|q| q.raw()).collect::<Vec<_>>();
         for a in action.rules.iter_mut() {
@@ -779,8 +704,16 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
             }
         }
 
+        println!(
+            "  rss: queues={} (queue_map.len={}) reta_ptr={:p}",
+            action.rss.get(0).map(|r| r.queue_num).unwrap_or(0),
+            port.queue_map.len(),
+            action.rss.get(0).map(|r| r.queue).unwrap_or(std::ptr::null())
+        );
+
         let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
         unsafe {
+            println!("  validating...");
             let ret = dpdk::rte_flow_validate(
                 port.id.raw(),
                 attr.raw() as *const _,
@@ -789,9 +722,22 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
                 &mut error as *mut _,
             );
             if ret != 0 {
-                let _msg: &CStr = CStr::from_ptr(error.message);
-                // bail
+                let msg = if error.message.is_null() {
+                "<no dpdk error message>".to_string()
+                } else {
+                    CStr::from_ptr(error.message).to_string_lossy().into_owned()
+                };
+                println!("  validate: FAIL type={:?} cause={:?} msg={}", error.type_, error.cause, msg);
+                anyhow::bail!(
+                    "rte_flow_validate failed on port {} (type={:?}, cause={:?}): {}",
+                    port.id,
+                    error.type_,
+                    error.cause,
+                    msg
+                );
             } else {
+                println!("  validate: OK");
+                println!("  creating...");
                 let ret = dpdk::rte_flow_create(
                     port.id.raw(),
                     attr.raw() as *const _,
@@ -800,11 +746,26 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
                     &mut error as *mut _,
                 );
                 if ret.is_null() {
-                    let _msg: &CStr = CStr::from_ptr(error.message);
-                    // bail
+                    let msg = if error.message.is_null() {
+                        "<no dpdk error message>".to_string()
+                    } else {
+                        CStr::from_ptr(error.message).to_string_lossy().into_owned()
+                    };
+                    println!("  create:   FAIL type={:?} cause={:?} msg={}", error.type_, error.cause, msg);
+                    anyhow::bail!(
+                        "rte_flow_create failed on port {} (type={:?}, cause={:?}): {}",
+                        port.id,
+                        error.type_,
+                        error.cause,
+                        msg
+                    );
+                }
+                else {
+                    println!("  create:   OK flow_ptr={:p}", ret);
                 }
             }
         }
     }
+
     Ok(())
 }

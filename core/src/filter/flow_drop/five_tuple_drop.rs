@@ -32,14 +32,17 @@ const LAST_GROUP: u32 = 14;
 const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
 const L4_LSB_MASK: u16 = 0x000F;
 
-/// Returns a table in [2..=14] for TCP/UDP flows, mirroring the dynamic
-/// redirect logic. Never returns 0.
+const TCP: u8 = 6;
+const UDP: u8 = 17;
+
+/// Returns a table in [2..=14] using dest port low nibble for TCP/UDP.
+/// Non-TCP/UDP fall back to BASE_GROUP.
 fn find_table(tuple: &FiveTuple) -> u32 {
-    let nibble = match tuple.proto {
-        6 | 17 => (tuple.resp.port() & L4_LSB_MASK) as u32, // dest-port low nibble
-        _ => 0, // if you ever call this for non-TCP/UDP, just bucket them too
+    let nibble_u32 = match tuple.proto as u8 {
+        TCP | UDP => u32::from(tuple.resp.port() & L4_LSB_MASK),
+        _ => 0,
     };
-    BASE_GROUP + (nibble % NUM_GROUPS) // always in 2..=14
+    BASE_GROUP + (nibble_u32 % NUM_GROUPS)
 }
 
 // Take in vector of PortIds, FiveTuple to block, and returns a vector of flow pointers

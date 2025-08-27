@@ -14,19 +14,6 @@ use crate::dpdk::{rte_flow, rte_flow_item, rte_flow_attr, rte_flow_error, rte_fl
     rte_flow_destroy, rte_flow_action, rte_flow_item_ipv4, rte_flow_item_ipv6, 
     rte_flow_item_tcp, rte_flow_item_udp};
 
-// OLD VERSION
-/*
-fn find_table(five_tuple: &FiveTuple, num_tables: u32) -> u32 {
-    use std::hash::{Hash, Hasher};
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
-    five_tuple.hash(&mut hasher);        // hash the five-tuple directly
-    let h = hasher.finish();
-    ((h % num_tables as u64) as u32) + 2 // map to a table index, skipping 0 and 1
-}
-*/
-
 const BASE_GROUP: u32 = 2;
 const LAST_GROUP: u32 = 14;
 const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
@@ -52,8 +39,9 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
     // Set ingress attribute
     let mut attr: rte_flow_attr = unsafe { mem::zeroed() };
     attr.set_ingress(1);
+
+    // Set group and priority
     attr.group = find_table(tuple);
-    //attr.group = 0;
     println!("Installing rule for tuple {:?} in group {}", tuple, attr.group);
     attr.priority = 0;
 
@@ -211,7 +199,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
         flows.push(flow);
     }
 
-    // -------- REV (resp -> orig) --------
+    // -------- REVERSE FLOW (resp -> orig) --------
     let rev = FiveTuple {
         orig: tuple.resp,
         resp: tuple.orig,
@@ -318,48 +306,3 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
 
     Ok(())
 }
-
-
-
-/*
-// OLD VERSION
-pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> Result<()> {
-    if port_ids.len() != flows.len() {
-        anyhow::bail!(
-            "Mismatched lengths: {} ports but {} flows",
-            port_ids.len(),
-            flows.len()
-        );
-    }
-
-    for (port_id, flow) in port_ids.iter().zip(flows.iter()) {
-        if flow.is_null() {
-            println!("No flow to uninstall on port {}", port_id.raw());
-            continue;
-        }
-
-        let mut error: rte_flow_error = unsafe { std::mem::zeroed() };
-        let start = unsafe { dpdk::rte_rdtsc() };
-        let ret = unsafe { rte_flow_destroy(port_id.raw(), *flow, &mut error) };
-        let duration = unsafe { dpdk::rte_rdtsc() } - start;
-        println!("Latency (cycles): {}", duration);
-
-        if ret != 0 {
-            let msg = unsafe {
-                CStr::from_ptr(error.message)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            anyhow::bail!(
-                "Failed to uninstall flow on port {}: {}",
-                port_id.raw(),
-                msg
-            );
-        }
-
-        println!("Uninstalled DROP rule on port {}", port_id.raw());
-    }
-
-    Ok(())
-}
-*/

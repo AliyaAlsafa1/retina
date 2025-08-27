@@ -260,31 +260,6 @@ fn validate_rule(
     }
 }
 
-/*
-// ORIGINAL
-
-fn install_pattern(
-    lpattern: &LayeredPattern,
-    port: &Port,
-    group: u32,
-    priority: u32,
-) -> Result<()> {
-    let attr = FlowAttribute::new(group, priority);
-    if let Ok(mut pattern) = FlowPattern::from_layered_pattern(lpattern) {
-        let mut action = FlowAction::new(port.id);
-        // action.append_mark(tag as u32);
-
-        action.append_rss();
-        action.finish();
-
-        create_rule(lpattern, port, attr, &mut pattern, &mut action)
-    } else {
-        bail!(HardwareFilterError::InvalidRule(lpattern.to_owned()));
-    }
-}
-*/
-
-// Back to original
 fn install_pattern(
     lpattern: &LayeredPattern,
     port: &Port,
@@ -379,9 +354,6 @@ fn add_redirect(
     pattern_rules: &[rte_flow_item],
 ) -> Result<()> {
     let attr = FlowAttribute::new(from_group, priority);
-
-    // @ALIYA - changed this so that the pattern is specified by the caller,
-    // vs. redirecting ALL traffic.
 
     // Set action to redirect
     let mut action = FlowAction::new(port.id);
@@ -569,9 +541,9 @@ fn dump_pattern(label: &str, pat: &[rte_flow_item]) {
     }
 }
 
-// This uses the port mask approach, which is a bit hacky --
-// if we could pipe in an RSS result, that would be better, but it's
-// less likely to be supported by all NICs, and it's hard to figure out.
+// Uses a port mask approach to install hardware rules that bucket traffic to tables
+// based on the last 4 bits of their port. Provides a deterministic way to spread traffic
+// across tables 2 through N.
 pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
     // Debug output
     println!(
@@ -637,28 +609,11 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
         add_redirect(port, 0, group, HIGH_PRIORITY, &pattern[..=i])?;
 
         // REPEAT for UDP BELOW //
-
-        /*
-        i = 0;
-        i += 1;
-        i += 1;
-
-        let item = flow_item::build_udp_port_mask(nibble, 0x000F);
-
-        pattern[i] = rte_flow_item {
-            type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_UDP, // redundant 
-            spec: item.spec(),
-            mask: item.mask(),
-            last: ptr::null(),
-        };
-        i += 1;
-
-        add_redirect(port, 0, group, HIGH_PRIORITY, &pattern[..=i])?;
-        */
+        // unimplemented
     }
 
+    // Create RSS rule on all tables
     for group in 2..16
-    // replace with NUM_TABLES eventually
     {
         // Low priority on table N
         let attr = FlowAttribute::new(group, LOW_PRIORITY);

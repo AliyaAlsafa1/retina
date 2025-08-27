@@ -327,11 +327,6 @@ pub struct OnlineConfig {
     #[serde(default = "default_hardware_assist")]
     pub hardware_assist: bool,
 
-    /// @ALIYA add `dyn_hardware_assist` to the config options
-    /// (with documentation).
-    /// When OnlineConfig is loaded (look at the `runtime`), assert that
-    /// if dyn_hardware_assist is on, then hardware_assist is off.
-
     /// If set, enables *dynamic* hardware assist (masked L4-port jump on table 0
     /// and low-priority RSS rules on tables N ≥ 2). This is **mutually exclusive**
     /// with `hardware_assist`. Prefer this when your NIC supports masked L4 port

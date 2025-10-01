@@ -63,8 +63,8 @@ pub(super) fn build_tcp_port_mask(val: u16, mask: u16) -> FlowItem<dpdk::rte_flo
     let mut tcp_spec: dpdk::rte_flow_item_tcp = unsafe { mem::zeroed() };
     let mut tcp_mask: dpdk::rte_flow_item_tcp = unsafe { mem::zeroed() };
 
-    tcp_spec.hdr.src_port = val.to_be(); // e.g., 0x0001
-    tcp_mask.hdr.src_port = mask.to_be();
+    tcp_spec.hdr.dst_port = val.to_be(); // e.g., 0x0001
+    tcp_mask.hdr.dst_port = mask.to_be();
 
     FlowItem::<dpdk::rte_flow_item_tcp> {
         item_type: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_TCP,

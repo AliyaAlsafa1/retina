@@ -486,7 +486,7 @@ pub(crate) fn flush_rules(port: &Port) {
 
 // DECLARING CONSTS HERE FOR EASE... will move up later
 const BASE_GROUP: u32 = 2;
-const LAST_GROUP: u32 = 14;
+const LAST_GROUP: u32 = 2;
 const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
 
 // Debug

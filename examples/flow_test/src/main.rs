@@ -69,7 +69,7 @@ lazy_static! {
 const TIMEOUT_SECS: u64 = 3;
 
 // Number of flows to block
-const NUM_FLOWS: usize = 3;
+const NUM_FLOWS: usize = 7;
 
 // Get NUM_FLOWS amount of five_tuple from TLS handshake, block flow with that five_tuple
 // Timeout flow after TIMEOUT_SECS seconds

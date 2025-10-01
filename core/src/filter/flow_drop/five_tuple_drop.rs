@@ -41,7 +41,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
     attr.set_ingress(1);
 
     // Set group and priority
-    attr.group = find_table(tuple);
+    attr.group = 2;
     println!("Installing rule for tuple {:?} in group {}", tuple, attr.group);
     attr.priority = 0;
 

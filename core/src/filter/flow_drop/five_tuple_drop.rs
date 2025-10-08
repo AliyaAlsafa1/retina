@@ -270,7 +270,8 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
 
 /// Uninstall DROP flow rules previously installed with `install_drop_flow`
 pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> Result<()> {
-    if port_ids.len() != flows.len() {
+    // ERROR MESSAGE
+    if (port_ids.len() * 2) != flows.len() { // Must double length of port_ids to account for forward/rev flows
         bail!(
             "Mismatched lengths: {} ports but {} flows",
             port_ids.len(),
@@ -279,6 +280,7 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
     }
 
     for (port_id, flow) in port_ids.iter().zip(flows.iter()) {
+        // ERROR MESSAGE
         if flow.is_null() {
             println!("No DROP flow to uninstall on port {}", port_id.raw());
             continue;
@@ -287,9 +289,12 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
         let mut error: rte_flow_error = unsafe { mem::zeroed() };
         let start = unsafe { dpdk::rte_rdtsc() };
         let ret = unsafe { rte_flow_destroy(port_id.raw(), *flow, &mut error) };
-        let duration = unsafe { dpdk::rte_rdtsc() } - start;
-        println!("Uninstall latency (cycles): {}", duration);
 
+        // Latency Calculations
+        //let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        //println!("Uninstall latency (cycles): {}", duration);
+
+        // ERROR MESSAGE
         if ret != 0 {
             let msg = unsafe {
                 CStr::from_ptr(error.message).to_string_lossy().into_owned()
@@ -301,7 +306,7 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
             );
         }
 
-        println!("Uninstalled DROP rule on port {}", port_id.raw());
+        //println!("Uninstalled DROP rule on port {}", port_id.raw());
     }
 
     Ok(())

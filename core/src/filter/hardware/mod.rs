@@ -557,7 +557,6 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
     for nibble in 0u16..=15 { // Nibble is the lower 4 bits of the port
         // Compute destination group via modulo
         let group = BASE_GROUP + ((nibble as u32) % NUM_GROUPS);
-        println!("\n[nibble={:#X} ({})] -> dst_group={}", nibble, nibble, group);
 
         // Pattern buffer structure is ETH + [IP] + [L4] + END
         let mut pattern: [rte_flow_item; 5] = unsafe { mem::zeroed() };
@@ -600,12 +599,7 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
             last: ptr::null(),
         };
 
-        // Dump + Install
-        dump_pattern("TCP", &pattern[..=i]);
-        println!(
-            "  add_redirect TCP: src_group=0 -> dst_group={} priority={} (nibble={:#X})",
-            group, HIGH_PRIORITY, nibble
-        );
+        // Install
         add_redirect(port, 0, group, HIGH_PRIORITY, &pattern[..=i])?;
 
         // REPEAT for UDP BELOW //
@@ -626,29 +620,6 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
         flow_item::append_eth(&mut pattern_rules);
         flow_item::append_end(&mut pattern_rules);
 
-        // --- brief debug: pattern + actions (pre-RSS wiring)
-        println!(
-            "[base RSS] port={} group={} prio={} pattern_len={} actions_len={}",
-            port.id.raw(),
-            group,
-            LOW_PRIORITY,
-            pattern_rules.len(),
-            action.rules.len()
-        );
-        print!("  pattern: [");
-        for (k, it) in pattern_rules.iter().enumerate() {
-            if k > 0 { print!(", "); }
-            print!("{}", item_type_str(it.type_ as u32));
-        }
-        println!("]"); // ends line
-
-        print!("  actions: [");
-        for (k, a) in action.rules.iter().enumerate() {
-            if k > 0 { print!(", "); }
-            print!("{}", action_type_str(a.type_ as u32));
-        }
-        println!("]");
-
         // Everything below is copy-pasted from `create_rule` (obviously could be decomposed)
         let reta_raw = port.reta.iter().map(|q| q.raw()).collect::<Vec<_>>();
         for a in action.rules.iter_mut() {
@@ -659,16 +630,8 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
             }
         }
 
-        println!(
-            "  rss: queues={} (queue_map.len={}) reta_ptr={:p}",
-            action.rss.get(0).map(|r| r.queue_num).unwrap_or(0),
-            port.queue_map.len(),
-            action.rss.get(0).map(|r| r.queue).unwrap_or(std::ptr::null())
-        );
-
         let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
         unsafe {
-            println!("  validating...");
             let ret = dpdk::rte_flow_validate(
                 port.id.raw(),
                 attr.raw() as *const _,
@@ -682,7 +645,6 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
                 } else {
                     CStr::from_ptr(error.message).to_string_lossy().into_owned()
                 };
-                println!("  validate: FAIL type={:?} cause={:?} msg={}", error.type_, error.cause, msg);
                 anyhow::bail!(
                     "rte_flow_validate failed on port {} (type={:?}, cause={:?}): {}",
                     port.id,
@@ -691,8 +653,6 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
                     msg
                 );
             } else {
-                println!("  validate: OK");
-                println!("  creating...");
                 let ret = dpdk::rte_flow_create(
                     port.id.raw(),
                     attr.raw() as *const _,
@@ -706,7 +666,7 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
                     } else {
                         CStr::from_ptr(error.message).to_string_lossy().into_owned()
                     };
-                    println!("  create:   FAIL type={:?} cause={:?} msg={}", error.type_, error.cause, msg);
+
                     anyhow::bail!(
                         "rte_flow_create failed on port {} (type={:?}, cause={:?}): {}",
                         port.id,
@@ -714,9 +674,6 @@ pub(crate) fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
                         error.cause,
                         msg
                     );
-                }
-                else {
-                    println!("  create:   OK flow_ptr={:p}", ret);
                 }
             }
         }

@@ -42,7 +42,6 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
 
     // Set group and priority
     attr.group = 2;
-    println!("Installing rule for tuple {:?} in group {}", tuple, attr.group);
     attr.priority = 0;
 
     // Recommended to declare headers and masks here so they're not dropped prematurely
@@ -179,8 +178,10 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
                 &mut error,
             )
         };
-        let duration = unsafe { dpdk::rte_rdtsc() } - start;
-        println!("Latency (cycles): {}", duration);
+
+        // Latency Calculation
+        //let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        //println!("Latency (cycles): {}", duration);
         
         if flow.is_null() {
             let msg = unsafe {
@@ -195,7 +196,6 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
             );
         }
 
-        println!("Installed DROP rule on port {}", port_id.raw());
         flows.push(flow);
     }
 
@@ -244,8 +244,10 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
                 &mut error_rev,
             )
         };
-        let duration = unsafe { dpdk::rte_rdtsc() } - start;
-        println!("[REV] Latency (cycles): {}", duration);
+
+        // Latency Calculation
+        //let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        //println!("[REV] Latency (cycles): {}", duration);
 
         if flow_rev.is_null() {
             let msg = unsafe {
@@ -261,7 +263,6 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
             );
         }
 
-        println!("Installed REV DROP on port {} (group {})", port_id.raw(), attr.group);
         flows.push(flow_rev);
     }
 
@@ -270,7 +271,6 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
 
 /// Uninstall DROP flow rules previously installed with `install_drop_flow`
 pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> Result<()> {
-    // ERROR MESSAGE
     if (port_ids.len() * 2) != flows.len() { // Must double length of port_ids to account for forward/rev flows
         bail!(
             "Mismatched lengths: {} ports but {} flows",
@@ -280,7 +280,6 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
     }
 
     for (port_id, flow) in port_ids.iter().zip(flows.iter()) {
-        // ERROR MESSAGE
         if flow.is_null() {
             println!("No DROP flow to uninstall on port {}", port_id.raw());
             continue;
@@ -290,11 +289,10 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
         let start = unsafe { dpdk::rte_rdtsc() };
         let ret = unsafe { rte_flow_destroy(port_id.raw(), *flow, &mut error) };
 
-        // Latency Calculations
+        // Latency Calculation
         //let duration = unsafe { dpdk::rte_rdtsc() } - start;
         //println!("Uninstall latency (cycles): {}", duration);
 
-        // ERROR MESSAGE
         if ret != 0 {
             let msg = unsafe {
                 CStr::from_ptr(error.message).to_string_lossy().into_owned()
@@ -305,8 +303,6 @@ pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> 
                 msg
             );
         }
-
-        //println!("Uninstalled DROP rule on port {}", port_id.raw());
     }
 
     Ok(())

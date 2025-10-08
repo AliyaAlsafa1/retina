@@ -14,7 +14,7 @@ use retina_datatypes::{ConnRecord, TlsHandshake};
 use retina_filtergen::{filter, retina_main};
 
 use std::{
-    collections::VecDeque,
+    collections::{VecDeque, HashSet},
     path::PathBuf,
     sync::{Mutex, RwLock},
     thread,
@@ -60,18 +60,15 @@ lazy_static! {
 
 // Target flow to be blocked, and all blocked flow pointers
 lazy_static! {
-    static ref TARGET_FLOWS: Mutex<VecDeque<FiveTuple>> = Mutex::new(VecDeque::new());
-    static ref BLOCKED_FLOW_PTRS: RwLock<Option<Vec<FlowPtr>>> = RwLock::new(None);
+    static ref TARGET_FLOWS: Mutex<HashSet<FiveTuple>> = Mutex::new(HashSet::new());
     static ref FLOW_QUEUE: Mutex<VecDeque<FlowEntry>> = Mutex::new(VecDeque::new()); 
 }
 
 // Timeout in seconds for installed flow rules
-// TESTING: const TIMEOUT_SECS: u64 = 60;
-const TIMEOUT_SECS: u64 = 3;
+const TIMEOUT_SECS: u64 = 60;
 
 // Number of flows to block
-// TESTING : const NUM_FLOWS: usize = 1000000;
-const NUM_FLOWS: usize = 3;
+const NUM_FLOWS: usize = 1000000;
 
 // Get NUM_FLOWS amount of five_tuple from TLS handshake, block flow with that five_tuple
 // Timeout flow after TIMEOUT_SECS seconds
@@ -86,17 +83,15 @@ fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord) {
         // Already blocking this tuple, or max flows reached, do nothing
         return;
     } else {
-        targets.push_back(tuple.clone());
+        // insert into the set (no duplicates)
+        targets.insert(tuple.clone());
     }
 
     drop(targets); // unlock before potentially long operation ?
 
     if let Some(ports) = PORT_IDS.read().unwrap().as_ref() {
-        println!("Attempting to install drop flow for {:?}", tuple);
         match install_drop_flow(ports.clone(), tuple) {
             Ok(raw_flows) => {
-                println!("Installed drop flow for {:?}", tuple);
-
                 // Create FlowEntry with expiration time and push into FLOW_QUEUE
                 let entry = FlowEntry {
                     tuple: tuple.clone(),
@@ -126,15 +121,14 @@ fn flow_expirer() {
         // Pop and uninstall flows that have expired
         while let Some(entry) = queue.front() {
             if entry.expires_at <= now {
-                println!("Timeout reached, uninstalling drop flow {:?}", entry.tuple);
                 let raw_ptrs: Vec<*mut rte_flow> =
                     entry.flow_ptrs.iter().map(|fp| fp.0).collect();
 
                 if let Err(e) = uninstall_drop_flow(entry.ports.clone(), raw_ptrs) {
                     eprintln!("Failed to uninstall drop flow: {:?}", e);
-                } else {
-                    println!("Successfully uninstalled drop flow for {:?}", entry.tuple);
                 }
+                // can remove from the set after expiry
+                // TARGET_FLOWS.lock().unwrap().remove(&entry.tuple);
 
                 queue.pop_front();
             } else {
@@ -146,15 +140,14 @@ fn flow_expirer() {
 
 
 // Check if any five_tuples coming in match previously blocked flows
-// CHANGE TO HASH TABLE PLZ
 #[filter("tcp")]
 fn tcp_checker_cb(five_tuple: &FiveTuple, _core_id: &CoreId) {
-    let target_flows = TARGET_FLOWS.lock().unwrap();
-
-    if target_flows.iter().any(|target| target == five_tuple) {
+    let targets = TARGET_FLOWS.lock().unwrap();
+    if targets.contains(five_tuple) {
         println!("Unexpected TCP packet after drop: {:?}", five_tuple);
     }
 }
+
 
 #[retina_main(2)]
 fn main() {

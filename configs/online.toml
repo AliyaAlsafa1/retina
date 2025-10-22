@@ -10,8 +10,8 @@ duration = 120
 nb_rxd = 32768
 promiscuous = true
 mtu = 1500
-hardware_assist = false
-dyn_hardware_assist = true
+hardware_assist = true
+dyn_hardware_assist = false
 
 [[online.ports]]
 device = "0000:3b:00.0"

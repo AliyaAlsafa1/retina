@@ -60,15 +60,15 @@ lazy_static! {
 
 // Target flow to be blocked, and all blocked flow pointers
 lazy_static! {
-    static ref TARGET_FLOWS: Mutex<HashSet<FiveTuple>> = Mutex::new(HashSet::new());
+    //static ref TARGET_FLOWS: Mutex<HashSet<FiveTuple>> = Mutex::new(HashSet::new());
     static ref FLOW_QUEUE: Mutex<VecDeque<FlowEntry>> = Mutex::new(VecDeque::new()); 
 }
 
 // Timeout in seconds for installed flow rules
-const TIMEOUT_SECS: u64 = 60;
+const TIMEOUT_SECS: u64 = 5;
 
 // Number of flows to block
-const NUM_FLOWS: usize = 1000000;
+const NUM_FLOWS: usize = 10000000;
 
 // Get NUM_FLOWS amount of five_tuple from TLS handshake, block flow with that five_tuple
 // Timeout flow after TIMEOUT_SECS seconds
@@ -76,9 +76,10 @@ const NUM_FLOWS: usize = 1000000;
 fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord) {
     let tuple = &conn_record.five_tuple;
 
-    let mut targets = TARGET_FLOWS.lock().unwrap();
+    //let mut targets = TARGET_FLOWS.lock().unwrap();
 
     // Check if tuple is already blocked or we have reached limit of 3
+    /*
     if targets.contains(tuple) || targets.len() >= NUM_FLOWS {
         // Already blocking this tuple, or max flows reached, do nothing
         return;
@@ -86,38 +87,43 @@ fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord) {
         // insert into the set (no duplicates)
         targets.insert(tuple.clone());
     }
+    */
 
-    drop(targets); // unlock before potentially long operation ?
+    //drop(targets); // unlock before potentially long operation ?
+    if FLOW_QUEUE.lock().unwrap().len() < NUM_FLOWS {
+        /*
+        if let Some(ports) = PORT_IDS.read().unwrap().as_ref() {
+            match install_drop_flow(ports.clone(), tuple) {
+                Ok(raw_flows) => {
+                    // Create FlowEntry with expiration time and push into FLOW_QUEUE
+                    let entry = FlowEntry {
+                        tuple: tuple.clone(),
+                        ports: ports.clone(),
+                        flow_ptrs: raw_flows.into_iter().map(FlowPtr).collect(),
+                        expires_at: Instant::now() + Duration::from_secs(TIMEOUT_SECS),
+                    };
 
-    if let Some(ports) = PORT_IDS.read().unwrap().as_ref() {
-        match install_drop_flow(ports.clone(), tuple) {
-            Ok(raw_flows) => {
-                // Create FlowEntry with expiration time and push into FLOW_QUEUE
-                let entry = FlowEntry {
-                    tuple: tuple.clone(),
-                    ports: ports.clone(),
-                    flow_ptrs: raw_flows.into_iter().map(FlowPtr).collect(),
-                    expires_at: Instant::now() + Duration::from_secs(TIMEOUT_SECS),
-                };
-
-                // Add to FLOW_QUEUE for expiration management
-                FLOW_QUEUE.lock().unwrap().push_back(entry);
+                    // Add to FLOW_QUEUE for expiration management
+                    FLOW_QUEUE.lock().unwrap().push_back(entry);
+                }
+                Err(e) => eprintln!("Failed to install drop flow: {:?}", e),
             }
-            Err(e) => eprintln!("Failed to install drop flow: {:?}", e),
+        } else {
+            eprintln!("PORT_IDS is None when trying to install drop flow!");
         }
-    } else {
-        eprintln!("PORT_IDS is None when trying to install drop flow!");
+        */
     }
 }
 
 // Expire flows and uninstall them
 fn flow_expirer() {
     loop {
-        thread::sleep(Duration::from_secs(1));
+        //thread::sleep(Duration::from_secs(1));
 
         let mut queue = FLOW_QUEUE.lock().unwrap();
         let now = Instant::now();
 
+        /*
         // Pop and uninstall flows that have expired
         while let Some(entry) = queue.front() {
             if entry.expires_at <= now {
@@ -135,6 +141,7 @@ fn flow_expirer() {
                 break; // front not expired, stop checking
             }
         }
+            */
     }
 }
 
@@ -142,10 +149,11 @@ fn flow_expirer() {
 // Check if any five_tuples coming in match previously blocked flows
 #[filter("tcp")]
 fn tcp_checker_cb(five_tuple: &FiveTuple, _core_id: &CoreId) {
-    let targets = TARGET_FLOWS.lock().unwrap();
-    if targets.contains(five_tuple) {
-        println!("Unexpected TCP packet after drop: {:?}", five_tuple);
-    }
+    //println!("hi");
+    //let targets = TARGET_FLOWS.lock().unwrap();
+    //if targets.contains(five_tuple) {
+        //println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+    //}
 }
 
 
@@ -183,7 +191,7 @@ fn main() {
     }
 
     // Spawn the background expiration thread here
-    thread::spawn(flow_expirer);
+    //thread::spawn(flow_expirer);
 
     runtime.run();
 }

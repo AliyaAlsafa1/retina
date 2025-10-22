@@ -34,6 +34,7 @@ fn find_table(tuple: &FiveTuple) -> u32 {
 
 // Take in vector of PortIds, FiveTuple to block, and returns a vector of flow pointers
 pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec<*mut rte_flow>> {
+    //println!("Installing!");
     let mut flows = Vec::with_capacity(port_ids.len());
 
     // Set ingress attribute
@@ -271,6 +272,8 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
 
 /// Uninstall DROP flow rules previously installed with `install_drop_flow`
 pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> Result<()> {
+    //println!("Uninstalling!");
+
     if (port_ids.len() * 2) != flows.len() { // Must double length of port_ids to account for forward/rev flows
         bail!(
             "Mismatched lengths: {} ports but {} flows",

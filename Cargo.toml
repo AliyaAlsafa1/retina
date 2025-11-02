@@ -14,6 +14,7 @@ members = [
     "tests/functionality/basic_test",
     "examples/streaming",
     "examples/flow_test",
+    "examples/loss_test",
 ]
 resolver = "2"
 

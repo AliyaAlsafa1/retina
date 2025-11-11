@@ -11,3 +11,4 @@ libc = "0.2.174"
 retina-core = { path = "../../core" }
 retina-datatypes = { path = "../../datatypes" }
 retina-filtergen = { path = "../../filtergen" }
+serde = "1.0.228"

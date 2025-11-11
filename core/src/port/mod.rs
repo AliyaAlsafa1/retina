@@ -53,7 +53,7 @@ impl PortId {
     }
 
     /// For DPDK functions
-    pub(crate) fn raw(&self) -> u16 {
+    pub fn raw(&self) -> u16 {
         self.0
     }
 }

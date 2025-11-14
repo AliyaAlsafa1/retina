@@ -5,27 +5,44 @@ use std::net::{IpAddr};
 
 use anyhow::{bail, Result};
 use crate::FiveTuple;
+use crate::port::PortId;
 use crate::protocols::packet::tcp::TCP_PROTOCOL;
 use crate::protocols::packet::udp::UDP_PROTOCOL;
 
-// Use crate-relative paths
 use crate::dpdk;
 use crate::dpdk::{rte_flow, rte_flow_item, rte_flow_attr, rte_flow_error, rte_flow_create, 
     rte_flow_destroy, rte_flow_action, rte_flow_item_ipv4, rte_flow_item_ipv6, 
     rte_flow_item_tcp, rte_flow_item_udp};
 
-use crate::port::PortId;
+const BASE_GROUP: u32 = 2;
+const LAST_GROUP: u32 = 14;
+const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
+const L4_LSB_MASK: u16 = 0x000F;
 
-// Need to install on all of the NICs (and uninstall)
-// Look at config file to get a vec of strings that are pcie addrs
-// config = load_config(fname) which gives you runtime config
-// config.unline.unwrap().ports << vec of PortMaps .iter.map(blah blah).collect()
-// then use this to call new_from_device on each Port and get a vec of PortIds
+const TCP: u8 = 6;
+const UDP: u8 = 17;
 
-// Take in vector of PortIds
-pub fn install_drop_flow(port_id: &PortId, tuple: &FiveTuple) -> Result<*mut rte_flow> {
+/// Returns a table in [2..=14] using dest port low nibble for TCP/UDP.
+/// Non-TCP/UDP fall back to BASE_GROUP.
+fn find_table(tuple: &FiveTuple) -> u32 {
+    let nibble_u32 = match tuple.proto as u8 {
+        TCP | UDP => u32::from(tuple.resp.port() & L4_LSB_MASK),
+        _ => 0,
+    };
+    BASE_GROUP + (nibble_u32 % NUM_GROUPS)
+}
+
+// Take in vector of PortIds, FiveTuple to block, and returns a vector of flow pointers
+pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec<*mut rte_flow>> {
+    let mut flows = Vec::with_capacity(port_ids.len());
+
+    // Set ingress attribute
     let mut attr: rte_flow_attr = unsafe { mem::zeroed() };
     attr.set_ingress(1);
+
+    // Set group and priority
+    attr.group = 2;
+    attr.priority = 0;
 
     // Recommended to declare headers and masks here so they're not dropped prematurely
     let mut ipv4_spec: rte_flow_item_ipv4 = unsafe { mem::zeroed() };
@@ -129,7 +146,7 @@ pub fn install_drop_flow(port_id: &PortId, tuple: &FiveTuple) -> Result<*mut rte
 
     // END
     pattern[i] = rte_flow_item {
-        type_: dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_END,
+        type_: dpdk::rte_flow_item_type_RTE_FLOW_ITEM_TYPE_END,
         spec: ptr::null(),
         mask: ptr::null(),
         last: ptr::null(),
@@ -148,48 +165,145 @@ pub fn install_drop_flow(port_id: &PortId, tuple: &FiveTuple) -> Result<*mut rte
     ];
 
     // Create flow rule using pattern
-    let mut error: rte_flow_error = unsafe { mem::zeroed() };
-    let flow = unsafe {
-        rte_flow_create(
-            port_id.raw(),
-            &attr,
-            pattern.as_ptr(),
-            actions.as_ptr(),
-            &mut error,
-        )
-    };
+    for port_id in port_ids.iter() {
+        let mut error: rte_flow_error = unsafe { mem::zeroed() };
+        
+        let start = unsafe { dpdk::rte_rdtsc() };
+        let flow = unsafe {
+            rte_flow_create(
+                port_id.raw(),
+                &attr,
+                pattern.as_ptr(),
+                actions.as_ptr(),
+                &mut error,
+            )
+        };
 
-    if flow.is_null() {
-        let msg = unsafe { CStr::from_ptr(error.message) }.to_string_lossy();
-        bail!("Failed to install flow: {}", msg);
+        // Latency Calculation
+        //let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        //println!("Latency (cycles): {}", duration);
+        
+        if flow.is_null() {
+            let msg = unsafe {
+                CStr::from_ptr(error.message)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            anyhow::bail!(
+                "Failed to install flow on port {}: {}",
+                port_id.raw(),
+                msg
+            );
+        }
+
+        flows.push(flow);
     }
 
-    println!(
-        "Installed DROP rule for {}:{} → {}:{} (proto {})",
-        src_ip, src_port, dst_ip, dst_port, tuple.proto
-    );
-    Ok(flow)
+    // -------- REVERSE FLOW (resp -> orig) --------
+    let rev = FiveTuple {
+        orig: tuple.resp,
+        resp: tuple.orig,
+        proto: tuple.proto,
+    };
+    attr.group = find_table(&rev);
+
+    // Swap addresses/ports in the SAME specs, then call create again
+    match (src_ip, dst_ip) {
+        (IpAddr::V4(src), IpAddr::V4(dst)) => {
+            ipv4_spec.hdr.src_addr = u32::from_ne_bytes(dst.octets()); // swap
+            ipv4_spec.hdr.dst_addr = u32::from_ne_bytes(src.octets());
+        }
+        (IpAddr::V6(src), IpAddr::V6(dst)) => {
+            ipv6_spec.hdr.src_addr = dpdk::rte_ipv6_addr { a: dst.octets() };
+            ipv6_spec.hdr.dst_addr = dpdk::rte_ipv6_addr { a: src.octets() };
+        }
+        _ => bail!("Mismatched IP versions"),
+    }
+
+    match tuple.proto {
+        TCP_PROTOCOL => {
+            tcp_spec.hdr.src_port = dst_port.to_be(); // swap
+            tcp_spec.hdr.dst_port = src_port.to_be();
+        }
+        UDP_PROTOCOL => {
+            udp_spec.hdr.src_port = dst_port.to_be(); // swap
+            udp_spec.hdr.dst_port = src_port.to_be();
+        }
+        _ => unreachable!(),
+    }
+
+    for port_id in port_ids.iter() {
+        let mut error_rev: rte_flow_error = unsafe { mem::zeroed() };
+        let start = unsafe { dpdk::rte_rdtsc() };
+        let flow_rev = unsafe {
+            rte_flow_create(
+                port_id.raw(),
+                &attr,
+                pattern.as_ptr(),
+                actions.as_ptr(),
+                &mut error_rev,
+            )
+        };
+
+        // Latency Calculation
+        //let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        //println!("[REV] Latency (cycles): {}", duration);
+
+        if flow_rev.is_null() {
+            let msg = unsafe {
+                CStr::from_ptr(error_rev.message)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+
+            anyhow::bail!(
+                "Failed to install flow on port {}: {}",
+                port_id.raw(),
+                msg
+            );
+        }
+
+        flows.push(flow_rev);
+    }
+
+    Ok(flows)
 }
 
-pub fn uninstall_drop_flow(port_id: u16, flow: *mut rte_flow) -> Result<()> {
-    if flow.is_null() {
-        println!("No flow to uninstall on port {}", port_id);
-        return Ok(());
+/// Uninstall DROP flow rules previously installed with `install_drop_flow`
+pub fn uninstall_drop_flow(port_ids: Vec<PortId>, flows: Vec<*mut rte_flow>) -> Result<()> {
+    if (port_ids.len() * 2) != flows.len() { // Must double length of port_ids to account for forward/rev flows
+        bail!(
+            "Mismatched lengths: {} ports but {} flows",
+            port_ids.len(),
+            flows.len()
+        );
     }
 
-    let mut error: rte_flow_error = unsafe { std::mem::zeroed() };
+    for (port_id, flow) in port_ids.iter().zip(flows.iter()) {
+        if flow.is_null() {
+            println!("No DROP flow to uninstall on port {}", port_id.raw());
+            continue;
+        }
 
-    let ret = unsafe { rte_flow_destroy(port_id, flow, &mut error) };
+        let mut error: rte_flow_error = unsafe { mem::zeroed() };
+        let start = unsafe { dpdk::rte_rdtsc() };
+        let ret = unsafe { rte_flow_destroy(port_id.raw(), *flow, &mut error) };
 
-    if ret != 0 {
-        let msg = unsafe {
-            CStr::from_ptr(error.message)
-                .to_string_lossy()
-                .into_owned()
-        };
-        anyhow::bail!("Failed to uninstall flow on port {}: {}", port_id, msg);
+        // Latency Calculation
+        //let duration = unsafe { dpdk::rte_rdtsc() } - start;
+        //println!("Uninstall latency (cycles): {}", duration);
+
+        if ret != 0 {
+            let msg = unsafe {
+                CStr::from_ptr(error.message).to_string_lossy().into_owned()
+            };
+            bail!(
+                "Failed to uninstall DROP flow on port {}: {}",
+                port_id.raw(),
+                msg
+            );
+        }
     }
 
-    println!("Uninstalled DROP rule on port {}", port_id);
     Ok(())
 }

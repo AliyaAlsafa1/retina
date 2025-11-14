@@ -1,6 +1,6 @@
 use clap::Parser;
 use lazy_static::lazy_static;
-use retina_core::{FiveTuple, Runtime, config::default_config};
+use retina_core::{FiveTuple, Runtime, config::{default_config, load_config}};
 use retina_datatypes::{ByteCount, TlsHandshake};
 use retina_filtergen::{filter, retina_main};
 use std::fs::File;

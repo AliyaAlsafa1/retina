@@ -54,7 +54,7 @@ enum FlowEvent {
 
 const TIMEOUT_SECS: u64 = 5;
 // Number of flows to block (<= 0 means "disabled")
-const NUM_FLOWS: usize = 0;
+const NUM_FLOWS: usize = 1000;
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -85,7 +85,7 @@ struct Args {
         long,
         value_delimiter = ',',
         value_name = "CORES",
-        default_value = "4"
+        default_value = "40"
     )]
     worker_cores: Vec<u32>,
 

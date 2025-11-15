@@ -180,8 +180,6 @@ where
         log::info!("Starting ports...");
         for port in self.ports.values() {
             port.start();
-
-            println!("test1\n");
             if self.options.online.dyn_hardware_assist {
                 log::info!("Applying dynamic hardware filters...");
                 self.filter
@@ -192,7 +190,6 @@ where
                     ));
             } else if self.options.online.hardware_assist {
                 log::info!("Applying hardware filters...");
-                println!("test2\n");
                 let res = self.filter.set_hardware_filter(port);
                 match res {
                     Ok(_) => (),

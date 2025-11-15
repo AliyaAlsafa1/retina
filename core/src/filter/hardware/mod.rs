@@ -81,12 +81,12 @@ impl<'a> HardwareFilter<'a> {
         }
 
         info!("Applying hardware filter rules on Port {}...", self.port.id);
-        add_redirect(self.port, 0, 1, HIGH_PRIORITY)?;
         for pattern in self.patterns.iter() {
-            install_pattern(pattern, self.port, 1, LOW_PRIORITY)?;
+            install_pattern(pattern, self.port, 0, HIGH_PRIORITY)?;
         }
         // Non-matching traffic will be dropped by default on table 1
         // Redirect is faster than using a default DROP rule
+        add_redirect(self.port, 0, 1, LOW_PRIORITY)?;
         // drop_eth_traffic(self.port, 0, LOW_PRIORITY)?;
 
         Ok(())
@@ -452,7 +452,7 @@ fn drop_eth_traffic(port: &Port, group: u32, priority: u32) -> Result<()> {
 #[allow(dead_code)]
 pub fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
     println!("Installing dynamic rules\n");
-    // add_redirect(port, 0, 1, HIGH_PRIORITY)?;
+    add_redirect(port, 0, 1, HIGH_PRIORITY)?;
     // println!("Redirect installed\n");
     let attr = FlowAttribute::new(1, LOW_PRIORITY);
     // Pattern matches all Ethernet traffic

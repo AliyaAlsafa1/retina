@@ -81,12 +81,12 @@ impl<'a> HardwareFilter<'a> {
         }
 
         info!("Applying hardware filter rules on Port {}...", self.port.id);
+        add_redirect(self.port, 0, 1, HIGH_PRIORITY)?;
         for pattern in self.patterns.iter() {
-            install_pattern(pattern, self.port, 0, HIGH_PRIORITY)?;
+            install_pattern(pattern, self.port, 1, LOW_PRIORITY)?;
         }
         // Non-matching traffic will be dropped by default on table 1
         // Redirect is faster than using a default DROP rule
-        add_redirect(self.port, 0, 1, LOW_PRIORITY)?;
         // drop_eth_traffic(self.port, 0, LOW_PRIORITY)?;
 
         Ok(())
@@ -443,6 +443,69 @@ fn drop_eth_traffic(port: &Port, group: u32, priority: u32) -> Result<()> {
                 });
             } else {
                 info!("Created hardware flow rule to drop ethernet traffic by default.");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn install_dyn_hardware_rules(port: &Port) -> Result<()> {
+    println!("Installing dynamic rules\n");
+    // add_redirect(port, 0, 1, HIGH_PRIORITY)?;
+    // println!("Redirect installed\n");
+    let attr = FlowAttribute::new(1, LOW_PRIORITY);
+    // Pattern matches all Ethernet traffic
+    let mut pattern_rules: PatternRules = vec![];
+    flow_item::append_eth(&mut pattern_rules);
+    flow_item::append_end(&mut pattern_rules);
+
+    let mut action = FlowAction::new(port.id);
+    action.append_rss();
+    action.finish();
+    let reta_raw = port.reta.iter().map(|q| q.raw()).collect::<Vec<_>>();
+    for a in action.rules.iter_mut() {
+        if let dpdk::rte_flow_action_type_RTE_FLOW_ACTION_TYPE_RSS = a.type_ {
+            action.rss[0].queue_num = port.queue_map.len() as u32;
+            action.rss[0].queue = reta_raw.as_ptr();
+            a.conf = &action.rss[0] as *const _ as *const c_void;
+        }
+    }
+
+    let mut error: dpdk::rte_flow_error = unsafe { mem::zeroed() };
+    unsafe {
+        let ret = dpdk::rte_flow_validate(
+            port.id.raw(),
+            attr.raw() as *const _,
+            pattern_rules.as_ptr(),
+            action.rules.as_ptr(),
+            &mut error as *mut _,
+        );
+        if ret != 0 {
+            error!("RSS rule failed validation.");
+            let msg: &CStr = CStr::from_ptr(error.message);
+            bail!(HardwareFilterError::Validation {
+                lpattern: LayeredPattern::new(),
+                reason: msg.to_str().unwrap().to_string()
+            });
+            println!("Validation succeeded\n");
+        } else {
+            let ret = dpdk::rte_flow_create(
+                port.id.raw(),
+                attr.raw() as *const _,
+                pattern_rules.as_ptr(),
+                action.rules.as_ptr(),
+                &mut error as *mut _,
+            );
+            if ret.is_null() {
+                error!("RSS rule failed creation.");
+                let msg: &CStr = CStr::from_ptr(error.message);
+                bail!(HardwareFilterError::Creation {
+                    lpattern: LayeredPattern::new(),
+                    reason: msg.to_str().unwrap().to_string()
+                });
+            } else {
+                info!("Created RSS rule");
             }
         }
     }

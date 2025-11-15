@@ -181,8 +181,18 @@ where
         for port in self.ports.values() {
             port.start();
 
-            if self.options.online.hardware_assist {
+            println!("test1\n");
+            if self.options.online.dyn_hardware_assist {
+                log::info!("Applying dynamic hardware filters...");
+                self.filter
+                    .set_dynamic_hardware_filters(port)
+                    .expect(&format!(
+                        "Dynamic hardware filter install failed on Port {}",
+                        port.id
+                    ));
+            } else if self.options.online.hardware_assist {
                 log::info!("Applying hardware filters...");
+                println!("test2\n");
                 let res = self.filter.set_hardware_filter(port);
                 match res {
                     Ok(_) => (),

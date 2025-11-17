@@ -180,8 +180,15 @@ where
         log::info!("Starting ports...");
         for port in self.ports.values() {
             port.start();
-
-            if self.options.online.hardware_assist {
+            if self.options.online.dyn_hardware_assist {
+                log::info!("Applying dynamic hardware filters...");
+                self.filter
+                    .set_dynamic_hardware_filters(port)
+                    .expect(&format!(
+                        "Dynamic hardware filter install failed on Port {}",
+                        port.id
+                    ));
+            } else if self.options.online.hardware_assist {
                 log::info!("Applying hardware filters...");
                 let res = self.filter.set_hardware_filter(port);
                 match res {

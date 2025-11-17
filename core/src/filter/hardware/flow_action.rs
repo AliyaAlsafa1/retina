@@ -75,7 +75,6 @@ impl FlowAction {
         a_rss_conf.level = 0;
         a_rss_conf.types = rss_conf.rss_hf;
         a_rss_conf.key_len = rss_conf.rss_key_len as u32;
-
         // Since the RSS key needs to outlive this method, we use the static
         // SYMMETRIC_RSS_KEY instead of the key queried from the existing rss_conf
         a_rss_conf.key = SYMMETRIC_RSS_KEY.as_ptr();

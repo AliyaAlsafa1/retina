@@ -54,7 +54,7 @@ enum FlowEvent {
 
 const TIMEOUT_SECS: u64 = 5;
 // Number of flows to block (<= 0 means "disabled")
-const NUM_FLOWS: usize = 0;
+const NUM_FLOWS: usize = 1000;
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -136,7 +136,7 @@ fn expire_flows_now() {
 #[filter("tls")]
 fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord, rx_core: &CoreId) {
     let tuple = conn_record.five_tuple.clone();
-
+    println!("Inside TLS\n");
     if let Some(dispatcher) = FLOW_DISPATCHER.get() {
         let _ = dispatcher.dispatch(
             FlowEvent::TlsSeen {
@@ -153,7 +153,7 @@ fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord, rx_core: &CoreId) {
 fn tcp_checker_cb(five_tuple: &FiveTuple, _core_id: &CoreId) {
     let targets = TARGET_FLOWS.lock().unwrap();
     if targets.contains(five_tuple) {
-        // println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+        println!("Unexpected TCP packet after drop: {:?}", five_tuple);
     }
 }
 
@@ -198,7 +198,7 @@ fn main() {
         .set_batch_size(args.batch_size)
         .add_dispatcher(flow_dispatcher.clone(), |event: FlowEvent| {
             // Lightweight periodic maintenance
-            expire_flows_now();
+            // expire_flows_now();
 
             match event {
                 FlowEvent::TlsSeen { tuple, .. } => {

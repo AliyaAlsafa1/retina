@@ -41,7 +41,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
     attr.set_ingress(1);
 
     // Set group and priority
-    attr.group = 2;
+    attr.group = 1;
     attr.priority = 0;
 
     // Recommended to declare headers and masks here so they're not dropped prematurely
@@ -205,7 +205,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
         resp: tuple.orig,
         proto: tuple.proto,
     };
-    attr.group = find_table(&rev);
+    attr.group = 1;
 
     // Swap addresses/ports in the SAME specs, then call create again
     match (src_ip, dst_ip) {

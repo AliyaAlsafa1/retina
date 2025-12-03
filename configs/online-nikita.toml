@@ -1,0 +1,46 @@
+main_core = 0
+nb_memory_channels = 4
+ 
+[mempool]
+    capacity =  4194304
+    cache_size = 512
+
+[online]
+   duration = 20
+   nb_rxd = 32768
+   promiscuous = true
+   mtu = 1514
+   hardware_assist = false
+   dyn_hardware_assist = true
+
+   [online.monitor.display]
+       throughput = true
+       mempool_usage = true 
+       port_stats = ["rx_good_packets",
+                       "rx_good_bytes",
+                       "rx_phy_packets",
+                       "rx_phy_bytes",
+                       "rx_mbuf_allocation_errors",
+                       "rx_phy_discard_packets",
+                       "rx_missed_errors",
+                       "rx_q"]
+   [online.monitor.log]
+       directory = "./logs"
+       interval = 500
+
+   [[online.ports]]
+       device = "0000:c7:00.0"
+       cores = [1,2,3] 
+# [offline]
+# pcap = "/etinfo/shared_pcap/window.pcap-0"  # Corrected path
+# # pcap = "/mnt/traces/window-micro-split_00030_19700101010006.pcap"  # Corrected path
+# mtu = 9702
+ 
+[conntrack]
+max_connections = 10000000
+max_out_of_order = 500
+timeout_resolution = 100
+udp_inactivity_timeout = 60000
+tcp_inactivity_timeout = 300000
+tcp_establish_timeout = 5000
+

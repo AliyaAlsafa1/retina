@@ -53,8 +53,7 @@ enum FlowEvent {
 }
 
 const TIMEOUT_SECS: u64 = 5;
-// Number of flows to block (<= 0 means "disabled")
-const NUM_FLOWS: usize = 0;
+const NUM_FLOWS: usize = 100;
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -153,7 +152,7 @@ fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord, rx_core: &CoreId) {
 fn tcp_checker_cb(five_tuple: &FiveTuple, _core_id: &CoreId) {
     let targets = TARGET_FLOWS.lock().unwrap();
     if targets.contains(five_tuple) {
-        // println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+        println!("Unexpected TCP packet after drop: {:?}", five_tuple);
     }
 }
 

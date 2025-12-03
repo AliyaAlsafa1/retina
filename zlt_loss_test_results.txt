@@ -1,0 +1,9 @@
+flows_0: <1% Loss Throughput RESULT: 74721700000.0
+flows_10: <1% Loss Throughput RESULT: 74714600000.0
+flows_100: <1% Loss Throughput RESULT: 74722100000.0
+flows_1000: <1% Loss Throughput RESULT: 74704900000.0
+flows_100000: <1% Loss Throughput RESULT: 74719400000.0
+flows_200000: <1% Loss Throughput RESULT: 74687100000.0
+flows_500000: <1% Loss Throughput RESULT: 74373000000.0
+flows_750000: <1% Loss Throughput RESULT: 74322000000.0
+flows_1000000: <1% Loss Throughput RESULT: 45783300000.0

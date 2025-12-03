@@ -15,7 +15,7 @@ use crate::dpdk::{rte_flow, rte_flow_item, rte_flow_attr, rte_flow_error, rte_fl
     rte_flow_item_tcp, rte_flow_item_udp};
 
 const BASE_GROUP: u32 = 2;
-const LAST_GROUP: u32 = 14;
+const LAST_GROUP: u32 = 2;
 const NUM_GROUPS: u32 = LAST_GROUP - BASE_GROUP + 1; // 13
 const L4_LSB_MASK: u16 = 0x000F;
 
@@ -24,6 +24,7 @@ const UDP: u8 = 17;
 
 /// Returns a table in [2..=14] using dest port low nibble for TCP/UDP.
 /// Non-TCP/UDP fall back to BASE_GROUP.
+/// CURRENTLY UNUSED FOR TESTING !
 fn find_table(tuple: &FiveTuple) -> u32 {
     let nibble_u32 = match tuple.proto as u8 {
         TCP | UDP => u32::from(tuple.resp.port() & L4_LSB_MASK),
@@ -108,7 +109,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
         }
         _ => bail!("Mismatched IP versions"),
     }
-
+    
     // Check TCP vs UDP
     match tuple.proto {
         TCP_PROTOCOL => {
@@ -205,8 +206,9 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
         resp: tuple.orig,
         proto: tuple.proto,
     };
-    attr.group = find_table(&rev);
+    attr.group = 2;
 
+    
     // Swap addresses/ports in the SAME specs, then call create again
     match (src_ip, dst_ip) {
         (IpAddr::V4(src), IpAddr::V4(dst)) => {
@@ -219,7 +221,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
         }
         _ => bail!("Mismatched IP versions"),
     }
-
+    
     match tuple.proto {
         TCP_PROTOCOL => {
             tcp_spec.hdr.src_port = dst_port.to_be(); // swap

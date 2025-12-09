@@ -19,7 +19,7 @@ use retina_datatypes::{ConnRecord, TlsHandshake, ZcFrame};
 use retina_filtergen::{filter, retina_main};
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, Instant},
@@ -40,7 +40,7 @@ struct FlowEntry {
 
 lazy_static! {
     static ref PORT_IDS: RwLock<Option<Vec<PortId>>> = RwLock::new(None);
-    static ref TARGET_FLOWS: Mutex<HashSet<FiveTuple>> = Mutex::new(HashSet::new());
+    static ref TARGET_FLOWS: Mutex<HashMap<FiveTuple, Instant>> = Mutex::new(HashMap::new());
     static ref FLOW_QUEUE: Mutex<VecDeque<FlowEntry>> = Mutex::new(VecDeque::new());
 }
 
@@ -53,10 +53,9 @@ enum FlowEvent {
     TlsSeen { tuple: FiveTuple, rx_core: CoreId },
 }
 
-const TIMEOUT_SECS: u64 = 45;
-const NUM_FLOWS: usize = 1;
-static START_TIME: OnceLock<Instant> = OnceLock::new();
-const GRACE_PERIOD: u64 = 20;
+const TIMEOUT_SECS: u64 = 10;
+const NUM_FLOWS: usize = 100;
+const GRACE_PERIOD: u64 = 5;
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -127,7 +126,7 @@ fn expire_flows_now() {
             eprintln!("Failed to uninstall drop flow: {:?}", e);
         }
         // Optionally also remove from TARGET_FLOWS when it expires:
-        // TARGET_FLOWS.lock().unwrap().remove(&expired.tuple);
+        TARGET_FLOWS.lock().unwrap().remove(&expired.tuple);
     }
 }
 
@@ -152,34 +151,24 @@ fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
 
 #[filter("tcp")]
 fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
-    // Wait GRACE_PERIOD seconds after start before checking
-    if let Some(start) = START_TIME.get() {
-        if Instant::now().duration_since(*start) < Duration::from_secs(GRACE_PERIOD) {
-            return;
-        }
-    } else {
-        return;
-    }
-
-    println!("Starting to check...");
-
-    // Start checking for FiveTuple in TARGET_FLOWS
     if let Ok(ctxt) = L4Context::new(zc) {
         let five_tuple = FiveTuple::from_ctxt(ctxt);
         let targets = TARGET_FLOWS.lock().unwrap();
-        if targets.contains(&five_tuple) {
-            println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+
+        if let Some(&inserted_at) = targets.get(&five_tuple) {
+            // Only complain if the flow has been in the drop set longer than GRACE_PERIOD
+            if Instant::now().duration_since(inserted_at) > Duration::from_secs(GRACE_PERIOD) {
+                println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+            }
         }
     }
 }
+
 
 // ===== Main =====
 
 #[retina_main(2)]
 fn main() {
-    // Record application start time
-    START_TIME.set(Instant::now()).ok();
-
     // Parse CLI args
     let args = Args::parse();
     if args.show_args {
@@ -230,11 +219,13 @@ fn main() {
                     // Deduplicate and cap
                     {
                         let mut targets = TARGET_FLOWS.lock().unwrap();
-                        if targets.contains(&tuple) || targets.len() >= NUM_FLOWS {
+                        if targets.contains_key(&tuple) || targets.len() >= NUM_FLOWS {
                             return;
                         }
-                        targets.insert(tuple.clone());
+                        // Record when we installed the drop rule for this tuple
+                        targets.insert(tuple.clone(), Instant::now());
                     }
+
 
                     // Install, if we have ports
                     let maybe_ports = PORT_IDS.read().unwrap().clone();

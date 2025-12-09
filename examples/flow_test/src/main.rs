@@ -10,11 +10,12 @@ use retina_core::{
     CoreId,
     FiveTuple,
     Runtime,
+    conntrack::pdu::L4Context,
 };
 
 use retina_core::dpdk::rte_flow;
 
-use retina_datatypes::{ConnRecord, TlsHandshake};
+use retina_datatypes::{ConnRecord, TlsHandshake, ZcFrame};
 use retina_filtergen::{filter, retina_main};
 
 use std::{
@@ -52,8 +53,10 @@ enum FlowEvent {
     TlsSeen { tuple: FiveTuple, rx_core: CoreId },
 }
 
-const TIMEOUT_SECS: u64 = 5;
-const NUM_FLOWS: usize = 100;
+const TIMEOUT_SECS: u64 = 45;
+const NUM_FLOWS: usize = 1;
+static START_TIME: OnceLock<Instant> = OnceLock::new();
+const GRACE_PERIOD: u64 = 20;
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -133,8 +136,8 @@ fn expire_flows_now() {
 /// On each TLS handshake, just dispatch the tuple to worker threads.
 /// Note: we include &CoreId to preserve per-RX-core affinity when ChannelMode::PerCore.
 #[filter("tls")]
-fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord, rx_core: &CoreId) {
-    let tuple = conn_record.five_tuple.clone();
+fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
+    let tuple = five_tuple.clone();
 
     if let Some(dispatcher) = FLOW_DISPATCHER.get() {
         let _ = dispatcher.dispatch(
@@ -147,12 +150,26 @@ fn tls_cb(_tls: &TlsHandshake, conn_record: &ConnRecord, rx_core: &CoreId) {
     }
 }
 
-/// TCP Checker
 #[filter("tcp")]
-fn tcp_checker_cb(five_tuple: &FiveTuple, _core_id: &CoreId) {
-    let targets = TARGET_FLOWS.lock().unwrap();
-    if targets.contains(five_tuple) {
-        println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
+    // Wait GRACE_PERIOD seconds after start before checking
+    if let Some(start) = START_TIME.get() {
+        if Instant::now().duration_since(*start) < Duration::from_secs(GRACE_PERIOD) {
+            return;
+        }
+    } else {
+        return;
+    }
+
+    println!("Starting to check...");
+
+    // Start checking for FiveTuple in TARGET_FLOWS
+    if let Ok(ctxt) = L4Context::new(zc) {
+        let five_tuple = FiveTuple::from_ctxt(ctxt);
+        let targets = TARGET_FLOWS.lock().unwrap();
+        if targets.contains(&five_tuple) {
+            println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+        }
     }
 }
 
@@ -160,6 +177,10 @@ fn tcp_checker_cb(five_tuple: &FiveTuple, _core_id: &CoreId) {
 
 #[retina_main(2)]
 fn main() {
+    // Record application start time
+    START_TIME.set(Instant::now()).ok();
+
+    // Parse CLI args
     let args = Args::parse();
     if args.show_args {
         println!("{args:#?}");

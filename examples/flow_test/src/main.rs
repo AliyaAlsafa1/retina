@@ -3,14 +3,12 @@ use lazy_static::lazy_static;
 use serde::Serialize;
 
 use retina_core::{
+    CoreId, FiveTuple, Runtime,
     config::{default_config, load_config},
+    conntrack::pdu::L4Context,
     filter::flow_drop::{install_drop_flow, uninstall_drop_flow},
     multicore::{ChannelDispatcher, ChannelMode, SharedWorkerThreadSpawner},
     port::PortId,
-    CoreId,
-    FiveTuple,
-    Runtime,
-    conntrack::pdu::L4Context,
 };
 
 use retina_core::dpdk::rte_flow;
@@ -44,7 +42,7 @@ lazy_static! {
     static ref FLOW_QUEUE: Mutex<VecDeque<FlowEntry>> = Mutex::new(VecDeque::new());
 }
 
-// Dispatching 
+// Dispatching
 static FLOW_DISPATCHER: OnceLock<Arc<ChannelDispatcher<FlowEvent>>> = OnceLock::new();
 
 #[derive(Clone, Serialize)]
@@ -53,8 +51,6 @@ enum FlowEvent {
     TlsSeen { tuple: FiveTuple, rx_core: CoreId },
 }
 
-const TIMEOUT_SECS: u64 = 10;
-const NUM_FLOWS: usize = 100;
 const GRACE_PERIOD: u64 = 5;
 
 // ===== CLI =====
@@ -63,7 +59,6 @@ enum ChannelModeArg {
     PerCore,
     Shared,
 }
-
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -104,9 +99,13 @@ struct Args {
 
     #[clap(long, action = ArgAction::SetTrue)]
     show_args: bool,
+
+    #[clap(long, value_name = "TIMEOUT_SECS", default_value = "5")]
+    timeout_secs: u64,
+
+    #[clap(long, value_name = "NUM_FLOWS", default_value = "1000")]
+    num_flows: usize,
 }
-
-
 
 // ===== Helpers =====
 
@@ -136,6 +135,7 @@ fn expire_flows_now() {
 /// Note: we include &CoreId to preserve per-RX-core affinity when ChannelMode::PerCore.
 #[filter("tls")]
 fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
+    // println!("inside tls\n");
     let tuple = five_tuple.clone();
 
     if let Some(dispatcher) = FLOW_DISPATCHER.get() {
@@ -151,6 +151,7 @@ fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
 
 #[filter("tcp")]
 fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
+    // println!("inside tcp\n");
     if let Ok(ctxt) = L4Context::new(zc) {
         let five_tuple = FiveTuple::from_ctxt(ctxt);
         let targets = TARGET_FLOWS.lock().unwrap();
@@ -164,7 +165,6 @@ fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
     }
 }
 
-
 // ===== Main =====
 
 #[retina_main(2)]
@@ -174,6 +174,9 @@ fn main() {
     if args.show_args {
         println!("{args:#?}");
     }
+    let timeout_secs: u64 = args.timeout_secs;
+    let num_flows: usize = args.num_flows;
+
     let config = if let Some(path) = args.config.clone() {
         load_config(path)
     } else {
@@ -205,27 +208,27 @@ fn main() {
     let worker_handle = SharedWorkerThreadSpawner::new()
         .set_cores(worker_core_ids)
         .set_batch_size(args.batch_size)
-        .add_dispatcher(flow_dispatcher.clone(), |event: FlowEvent| {
+        .add_dispatcher(flow_dispatcher.clone(), move |event: FlowEvent| {
             // Lightweight periodic maintenance
             expire_flows_now();
 
             match event {
                 FlowEvent::TlsSeen { tuple, .. } => {
                     // Respect NUM_FLOWS cap first
-                    if NUM_FLOWS == 0 {
+                    if num_flows == 0 {
                         return;
                     }
 
                     // Deduplicate and cap
                     {
                         let mut targets = TARGET_FLOWS.lock().unwrap();
-                        if targets.contains_key(&tuple) || targets.len() >= NUM_FLOWS {
+                        if targets.contains_key(&tuple) || targets.len() >= num_flows {
+                            println!("Not more flow available\n");
                             return;
                         }
                         // Record when we installed the drop rule for this tuple
                         targets.insert(tuple.clone(), Instant::now());
                     }
-
 
                     // Install, if we have ports
                     let maybe_ports = PORT_IDS.read().unwrap().clone();
@@ -236,7 +239,7 @@ fn main() {
                                     tuple: tuple.clone(),
                                     ports: ports.clone(),
                                     flow_ptrs: raw_flows.into_iter().map(FlowPtr).collect(),
-                                    expires_at: Instant::now() + Duration::from_secs(TIMEOUT_SECS),
+                                    expires_at: Instant::now() + Duration::from_secs(timeout_secs),
                                 };
                                 FLOW_QUEUE.lock().unwrap().push_back(entry);
                             }
@@ -270,6 +273,8 @@ fn main() {
 
         *PORT_IDS.write().unwrap() = Some(port_ids);
     }
+
+    println!("EVENT dut_ready\n");
 
     // Run packet processing
     runtime.run();

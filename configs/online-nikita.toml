@@ -6,7 +6,7 @@ nb_memory_channels = 4
     cache_size = 512
 
 [online]
-   duration = 20
+   duration = 5
    nb_rxd = 32768
    promiscuous = true
    mtu = 1514
@@ -29,7 +29,7 @@ nb_memory_channels = 4
        interval = 500
 
    [[online.ports]]
-       device = "0000:c7:00.0"
+       device = "0000:02:00.0"
        cores = [1,2,3] 
 # [offline]
 # pcap = "/etinfo/shared_pcap/window.pcap-0"  # Corrected path

@@ -577,6 +577,9 @@ impl fmt::Display for Throughputs {
             pretty_print_unit(self.tot_dropped_pkts as f64, "pkt"),
             self.percent_dropped,
         )?;
+        writeln!(f, "RESULT-INGRESS-MBPS {}", self.avg_ingress_bps / 1000000.0)?;
+        writeln!(f, "RESULT-GOOD-MBPS {}", self.avg_good_bps / 1000000.0)?;
+        writeln!(f, "RESULT-PROCESS-MBPS {}", self.avg_process_bps / 1000000.0)?;
         Ok(())
     }
 }

@@ -206,7 +206,7 @@ pub fn install_drop_flow(port_ids: Vec<PortId>, tuple: &FiveTuple) -> Result<Vec
         resp: tuple.orig,
         proto: tuple.proto,
     };
-    attr.group = 2;
+    attr.group = 1;
 
     
     // Swap addresses/ports in the SAME specs, then call create again

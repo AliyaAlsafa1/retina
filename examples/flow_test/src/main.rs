@@ -19,6 +19,7 @@ use retina_filtergen::{filter, retina_main};
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, Instant},
 };
@@ -51,7 +52,9 @@ enum FlowEvent {
     TlsSeen { tuple: FiveTuple, rx_core: CoreId },
 }
 
-const GRACE_PERIOD: u64 = 5;
+const GRACE_PERIOD: u64 = 0;
+// Simple counter
+static GLOBAL_TLS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -118,6 +121,7 @@ fn expire_flows_now() {
         if entry.expires_at > now {
             break;
         }
+        println!("expiring flows\n");
         // pop first (to drop the borrow) then uninstall
         let expired = queue.pop_front().unwrap();
         let raw_ptrs: Vec<*mut rte_flow> = expired.flow_ptrs.iter().map(|fp| fp.0).collect();
@@ -137,7 +141,7 @@ fn expire_flows_now() {
 fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
     // println!("inside tls\n");
     let tuple = five_tuple.clone();
-
+    // GLOBAL_TLS_COUNTER.fetch_add(1, Ordering::Relaxed);
     if let Some(dispatcher) = FLOW_DISPATCHER.get() {
         let _ = dispatcher.dispatch(
             FlowEvent::TlsSeen {
@@ -149,25 +153,25 @@ fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
     }
 }
 
-#[filter("tcp")]
-fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
-    // println!("inside tcp\n");
-    if let Ok(ctxt) = L4Context::new(zc) {
-        let five_tuple = FiveTuple::from_ctxt(ctxt);
-        let targets = TARGET_FLOWS.lock().unwrap();
-
-        if let Some(&inserted_at) = targets.get(&five_tuple) {
-            // Only complain if the flow has been in the drop set longer than GRACE_PERIOD
-            if Instant::now().duration_since(inserted_at) > Duration::from_secs(GRACE_PERIOD) {
-                println!("Unexpected TCP packet after drop: {:?}", five_tuple);
-            }
-        }
-    }
-}
+// #[filter("tcp")]
+// fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
+//     // println!("inside tcp\n");
+//     if let Ok(ctxt) = L4Context::new(zc) {
+//         let five_tuple = FiveTuple::from_ctxt(ctxt);
+//         let targets = TARGET_FLOWS.lock().unwrap();
+//
+//         if let Some(&inserted_at) = targets.get(&five_tuple) {
+//             // Only complain if the flow has been in the drop set longer than GRACE_PERIOD
+//             if Instant::now().duration_since(inserted_at) > Duration::from_secs(GRACE_PERIOD) {
+//                 println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+//             }
+//         }
+//     }
+// }
 
 // ===== Main =====
 
-#[retina_main(2)]
+#[retina_main(1)]
 fn main() {
     // Parse CLI args
     let args = Args::parse();
@@ -281,6 +285,10 @@ fn main() {
 
     // Graceful shutdown
     let final_stats = worker_handle.shutdown(args.flush_channels.as_ref());
+    println!(
+        "Number of TLS callbacks : {}",
+        GLOBAL_TLS_COUNTER.load(Ordering::Relaxed)
+    );
 
     if args.show_stats {
         if let Some(flow_stats) = final_stats.get(0) {

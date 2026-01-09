@@ -522,6 +522,9 @@ struct Throughputs {
     sw_dropped_pkts: u64,
     tot_dropped_pkts: u64,
     percent_dropped: f64,
+    tot_ingress_pps: f64,
+    tot_good_pps: f64,
+    tot_process_pps: f64,
 }
 
 impl Throughputs {
@@ -540,6 +543,9 @@ impl Throughputs {
             percent_dropped: 100.0
                 * ((curr_rx.dropped_pkts() - init_rx.dropped_pkts()) as f64
                     / (curr_rx.ingress_pkts - init_rx.ingress_pkts) as f64),
+            tot_ingress_pps: (curr_rx.ingress_pkts - init_rx.ingress_pkts) as f64,
+            tot_good_pps: (curr_rx.good_pkts - init_rx.good_pkts) as f64,
+            tot_process_pps: (curr_rx.process_pkts - init_rx.process_pkts) as f64,
         }
     }
 
@@ -576,9 +582,28 @@ impl fmt::Display for Throughputs {
             pretty_print_unit(self.tot_dropped_pkts as f64, "pkt"),
             self.percent_dropped,
         )?;
-        writeln!(f, "RESULT-INGRESS-Mbps {}", self.avg_ingress_bps / 1000000.0)?;
+        writeln!(
+            f,
+            "RESULT-INGRESS-Mbps {}",
+            self.avg_ingress_bps / 1000000.0
+        )?;
         writeln!(f, "RESULT-GOOD-Mbps {}", self.avg_good_bps / 1000000.0)?;
-        writeln!(f, "RESULT-PROCESS-Mbps {}", self.avg_process_bps / 1000000.0)?;
+        writeln!(
+            f,
+            "RESULT-PROCESS-Mbps {}",
+            self.avg_process_bps / 1000000.0
+        )?;
+        writeln!(
+            f,
+            "RESULST-TOT-INGRESS-MP {}",
+            self.tot_ingress_pps / 1000000.0
+        )?;
+        writeln!(f, "RESULST-TOT-GOOD-MP {}", self.tot_good_pps / 1000000.0)?;
+        writeln!(
+            f,
+            "RESULST-TOT-PROCESS-MP {}",
+            self.tot_process_pps / 1000000.0
+        )?;
         Ok(())
     }
 }

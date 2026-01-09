@@ -108,11 +108,15 @@ struct Args {
 
     #[clap(long, value_name = "NUM_FLOWS", default_value = "1000")]
     num_flows: usize,
+
+    #[clap(long, value_name = "SIZE_BASED_EXPIRING", action = ArgAction::SetTrue)]
+    size_based_expiring: bool,
 }
 
 // ===== Helpers =====
 
 /// Expire and uninstall any rules whose deadlines have passed.
+
 fn expire_flows_now() {
     let mut queue = FLOW_QUEUE.lock().unwrap();
     let now = Instant::now();
@@ -121,7 +125,7 @@ fn expire_flows_now() {
         if entry.expires_at > now {
             break;
         }
-        println!("expiring flows\n");
+        // println!("expiring flows\n");
         // pop first (to drop the borrow) then uninstall
         let expired = queue.pop_front().unwrap();
         let raw_ptrs: Vec<*mut rte_flow> = expired.flow_ptrs.iter().map(|fp| fp.0).collect();
@@ -133,6 +137,16 @@ fn expire_flows_now() {
     }
 }
 
+fn expire_single_flow() {
+    // println!("Expiring single flow");
+    let mut queue = FLOW_QUEUE.lock().unwrap();
+    let expired = queue.pop_front().unwrap();
+    let raw_ptrs: Vec<*mut rte_flow> = expired.flow_ptrs.iter().map(|fp| fp.0).collect();
+    if let Err(e) = uninstall_drop_flow(expired.ports.clone(), raw_ptrs) {
+        eprintln!("Failed to uninstall drop flow: {:?}", e);
+    }
+    TARGET_FLOWS.lock().unwrap().remove(&expired.tuple);
+}
 // ===== Filters =====
 
 /// On each TLS handshake, just dispatch the tuple to worker threads.
@@ -141,7 +155,12 @@ fn expire_flows_now() {
 fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
     // println!("inside tls\n");
     let tuple = five_tuple.clone();
-    // GLOBAL_TLS_COUNTER.fetch_add(1, Ordering::Relaxed);
+    // println!(
+    //     "src_port : {}, dst_port : {}",
+    //     five_tuple.orig.port(),
+    //     five_tuple.resp.port()
+    // );
+    GLOBAL_TLS_COUNTER.fetch_add(1, Ordering::Relaxed);
     if let Some(dispatcher) = FLOW_DISPATCHER.get() {
         let _ = dispatcher.dispatch(
             FlowEvent::TlsSeen {
@@ -153,25 +172,25 @@ fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
     }
 }
 
-// #[filter("tcp")]
-// fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
-//     // println!("inside tcp\n");
-//     if let Ok(ctxt) = L4Context::new(zc) {
-//         let five_tuple = FiveTuple::from_ctxt(ctxt);
-//         let targets = TARGET_FLOWS.lock().unwrap();
-//
-//         if let Some(&inserted_at) = targets.get(&five_tuple) {
-//             // Only complain if the flow has been in the drop set longer than GRACE_PERIOD
-//             if Instant::now().duration_since(inserted_at) > Duration::from_secs(GRACE_PERIOD) {
-//                 println!("Unexpected TCP packet after drop: {:?}", five_tuple);
-//             }
-//         }
-//     }
-// }
+#[filter("tcp")]
+fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
+    // println!("inside tcp\n");
+    if let Ok(ctxt) = L4Context::new(zc) {
+        let five_tuple = FiveTuple::from_ctxt(ctxt);
+        let targets = TARGET_FLOWS.lock().unwrap();
+
+        if let Some(&inserted_at) = targets.get(&five_tuple) {
+            // Only complain if the flow has been in the drop set longer than GRACE_PERIOD
+            if Instant::now().duration_since(inserted_at) > Duration::from_secs(GRACE_PERIOD) {
+                println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+            }
+        }
+    }
+}
 
 // ===== Main =====
 
-#[retina_main(1)]
+#[retina_main(2)]
 fn main() {
     // Parse CLI args
     let args = Args::parse();
@@ -214,7 +233,9 @@ fn main() {
         .set_batch_size(args.batch_size)
         .add_dispatcher(flow_dispatcher.clone(), move |event: FlowEvent| {
             // Lightweight periodic maintenance
-            expire_flows_now();
+            if !args.size_based_expiring {
+                expire_flows_now();
+            }
 
             match event {
                 FlowEvent::TlsSeen { tuple, .. } => {
@@ -227,13 +248,16 @@ fn main() {
                     {
                         let mut targets = TARGET_FLOWS.lock().unwrap();
                         if targets.contains_key(&tuple) || targets.len() >= num_flows {
-                            println!("Not more flow available\n");
-                            return;
+                            if args.size_based_expiring {
+                                expire_single_flow();
+                            } else {
+                                println!("Not more flow available\n");
+                                return;
+                            }
                         }
                         // Record when we installed the drop rule for this tuple
                         targets.insert(tuple.clone(), Instant::now());
                     }
-
                     // Install, if we have ports
                     let maybe_ports = PORT_IDS.read().unwrap().clone();
                     if let Some(ports) = maybe_ports {

@@ -1,0 +1,114 @@
+%info
+A test script to test TLS drop effectiveness 
+%variables
+
+WORKER_CORES=4
+NUM_FLOWS=1000000
+FLOW_TIMEOUT=1000
+DYN_HW_ASSIST={true,false}
+RATE_PPS={200000}
+
+%late_variables
+
+TEST_DURATION=15
+// trace=/mnt/traces/uclouvain-fullanon-45G.pcapng
+TRACE=/mnt/traces/uclouvain-fullanon-45G.pcap
+// TRACE=/mnt/traces/uclouvain-fullanon-45G-TCP-443.pcap
+// TRACE=/mnt/traces/tls_request_1endpoints_16conns.pcap-1
+// TRACE=/etinfo/users2/tyunyayev/traces/out_cleaned.pcap
+RETINA_PATH=/etinfo/users2/tyunyayev/Workspace/retina_repos/retina-drop
+MY_LD_LIBRARY_PATH=/etinfo/users2/tyunyayev/Workspace/dpdk-stable-24.11.3/install_jaskier/lib/x86_64-linux-gnu
+TREX_PATH=/etinfo/users2/tyunyayev/Workspace/v3.06
+
+
+%config
+n_run=2
+timeout=60
+var_lim={PROCESS-MBPS:0-,INGRESS-MBPS:0-,GOOD-MBPS:0-}
+var_names={PROCESS-MBPS:Processed RX (Mbps),INGRESS-MBPS:Ingress RX (Mbps),GOOD-MBPS:Good RX (Mbps)}
+
+// %trex:init@gen
+// sudo pkill -9 trex
+// INTERFACE_CFG=$(realpath trex_config.yaml)
+// echo "Starting TRex server in the background..."
+// cd $TREX_PATH
+// sudo nohup ./t-rex-64 -i --cfg $INTERFACE_CFG &
+// sleep 5
+
+%script@dut waitfor=gen_ready
+sudo env LD_LIBRARY_PATH=${MY_LD_LIBRARY_PATH} ${RETINA_PATH}/target/release/flow_test  --worker-cores ${WORKER_CORES} --num-flows ${NUM_FLOWS} --timeout-secs ${FLOW_TIMEOUT} --config config.toml --size-based-expiring 
+
+// %tcp_replay:script@gen waitfor=dut_ready
+// sudo tcpreplay --mbps 10 -i "${gen:0:ifname}" "${TRACE}"
+
+%trex:script@gen 
+cd $TREX_PATH
+printf "stop -a\nquit\n" | ./trex-console 
+echo "EVENT gen_ready"
+sleep 777
+
+
+%trex:script@gen  waitfor=dut_ready 
+
+cd $TREX_PATH
+echo "Pushing PCAP: ${TRACE}..."
+
+RATE=$(echo "scale=2; 1000000 / ${RATE_PPS}" | bc)
+printf "push -r --port 0  -f ${TRACE} --force --i ${RATE} --c 0" | ./trex-console &>/dev/null
+
+sleep 777
+
+%file config.toml
+
+main_core = 0
+nb_memory_channels = 4
+ 
+[mempool]
+    capacity =  4194304
+    cache_size = 512
+
+[online]
+   duration = ${TEST_DURATION}
+   nb_rxd = 32768
+   promiscuous = true
+   mtu = 1514
+   hardware_assist = false
+   dyn_hardware_assist = ${DYN_HW_ASSIST}
+
+   [online.monitor.display]
+       throughput = true
+       mempool_usage = true 
+       port_stats = ["rx_good_packets",
+                       "rx_good_bytes",
+                       "rx_phy_packets",
+                       "rx_phy_bytes",
+                       "rx_mbuf_allocation_errors",
+                       "rx_phy_discard_packets",
+                       "rx_missed_errors",
+                       "rx_q"]
+   [online.monitor.log]
+       directory = "./logs"
+       interval = 500
+
+   [[online.ports]]
+       device = "0000:02:00.0"
+       cores = [1] 
+ 
+[conntrack]
+max_connections = 10000000
+max_out_of_order = 500
+timeout_resolution = 100
+udp_inactivity_timeout = 60000
+tcp_inactivity_timeout = 300000
+tcp_establish_timeout = 5000
+
+%init-file trex_config.yaml
+- version: 2
+  interfaces: ['51:00.0', 'dummy']
+  platform:
+      master_thread_id: 0
+      latency_thread_id: 15
+      dual_if:
+        - socket: 0
+          threads: [1,2,3,4,5,6,7,8,9,10,11,12,13,14]
+

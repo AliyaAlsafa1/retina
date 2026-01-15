@@ -55,6 +55,7 @@ enum FlowEvent {
 const GRACE_PERIOD: u64 = 0;
 // Simple counter
 static GLOBAL_TLS_COUNTER: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_MISS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ===== CLI =====
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -153,7 +154,8 @@ fn expire_single_flow() {
 /// Note: we include &CoreId to preserve per-RX-core affinity when ChannelMode::PerCore.
 #[filter("tls")]
 fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
-    // println!("inside tls\n");
+    println!("## inside tls\n");
+    // five_tuple: &FiveTuple
     let tuple = five_tuple.clone();
     // println!(
     //     "src_port : {}, dst_port : {}",
@@ -174,7 +176,7 @@ fn tls_cb(_tls: &TlsHandshake, five_tuple: &FiveTuple, rx_core: &CoreId) {
 
 #[filter("tcp")]
 fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
-    // println!("inside tcp\n");
+    println!("## inside tcp\n");
     if let Ok(ctxt) = L4Context::new(zc) {
         let five_tuple = FiveTuple::from_ctxt(ctxt);
         let targets = TARGET_FLOWS.lock().unwrap();
@@ -182,7 +184,7 @@ fn tcp_checker_cb(zc: &ZcFrame, _core_id: &CoreId) {
         if let Some(&inserted_at) = targets.get(&five_tuple) {
             // Only complain if the flow has been in the drop set longer than GRACE_PERIOD
             if Instant::now().duration_since(inserted_at) > Duration::from_secs(GRACE_PERIOD) {
-                println!("Unexpected TCP packet after drop: {:?}", five_tuple);
+                GLOBAL_MISS_COUNTER.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -308,16 +310,21 @@ fn main() {
     runtime.run();
 
     // Graceful shutdown
-    let final_stats = worker_handle.shutdown(args.flush_channels.as_ref());
+    // let final_stats = worker_handle.shutdown(args.flush_channels.as_ref());
+    println!("after");
     println!(
-        "Number of TLS callbacks : {}",
+        "RESULT-NB-TLS-CALLBACKS {}",
         GLOBAL_TLS_COUNTER.load(Ordering::Relaxed)
     );
+    println!(
+        "RESULT-RTE-FLOW-MISSED {}",
+        GLOBAL_MISS_COUNTER.load(Ordering::Relaxed)
+    );
 
-    if args.show_stats {
-        if let Some(flow_stats) = final_stats.get(0) {
-            println!("=== FLOW Stats ===");
-            println!("{flow_stats}");
-        }
-    }
+    // if args.show_stats {
+    //     if let Some(flow_stats) = final_stats.get(0) {
+    //         println!("=== FLOW Stats ===");
+    //         println!("{flow_stats}");
+    //     }
+    // }
 }
